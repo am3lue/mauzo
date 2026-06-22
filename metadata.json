@@ -1,0 +1,6 @@
+{
+  "name": "Mauzo",
+  "description": "An offline-first sales tracker and active cash register with a soft claymorphic user interface, cashier calculator POS, debt tracker, and manager reporting desk.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

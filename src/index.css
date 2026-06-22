@@ -1,0 +1,163 @@
+@import "tailwindcss";
+
+@theme {
+  --color-clay-bg: #e0e5ec;
+  --color-clay-brand-soft: #dbebff;
+  --color-clay-brand-glow: #1e3a8a;
+  
+  --shadow-clay-card: 8px 8px 16px #babecc, -8px -8px 16px #ffffff;
+  --shadow-clay-btn: 6px 6px 12px #babecc, -6px -6px 12px #ffffff;
+  --shadow-clay-btn-active: inset 4px 4px 8px #babecc, inset -4px -4px 8px #ffffff;
+  --shadow-clay-input: inset 4px 4px 10px #babecc, inset -4px -4px 10px #ffffff;
+  --shadow-clay-concave: inset -8px -8px 20px #ffffff, inset 8px 8px 20px #babecc;
+  
+  --radius-clay: 30px;
+  --radius-clay-sm: 20px;
+}
+
+/* Custom Utilities */
+.glass-panel {
+  background: rgba(255, 255, 255, 0.25);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 30px;
+}
+
+.glass-card {
+  background: rgba(255, 255, 255, 0.25);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.clay-card {
+  background-color: #e0e5ec;
+  border-radius: var(--radius-clay);
+  box-shadow: var(--shadow-clay-card);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+}
+
+.clay-card-secondary {
+  background-color: #e0e5ec;
+  border-radius: var(--radius-clay-sm);
+  box-shadow: var(--shadow-clay-btn);
+  border: 1px solid rgba(255, 255, 255, 0.45);
+}
+
+.clay-btn {
+  background-color: #e0e5ec;
+  border-radius: var(--radius-clay-sm);
+  box-shadow: var(--shadow-clay-btn);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+}
+
+.clay-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 10px 10px 20px #babecc, -10px -10px 20px #ffffff;
+}
+
+.clay-btn:active {
+  transform: translateY(1px);
+  box-shadow: var(--shadow-clay-btn-active);
+}
+
+.clay-btn-indigo {
+  background-color: #d1e2ff;
+  color: #1e40af;
+  border-radius: var(--radius-clay-sm);
+  box-shadow: 6px 6px 12px #babecc, -6px -6px 12px #ffffff, inset -3px -3px 6px rgba(30, 64, 175, 0.15), inset 3px 3px 6px rgba(255, 255, 255, 0.7);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+}
+
+.clay-btn-indigo:hover {
+  box-shadow: 8px 8px 16px #babecc, -8px -8px 16px #ffffff, inset -4px -4px 8px rgba(30, 64, 175, 0.2), inset 4px 4px 8px rgba(255, 255, 255, 0.85);
+}
+
+.clay-btn-indigo:active {
+  box-shadow: inset -4px -4px 8px #ffffff, inset 4px 4px 8px #babecc;
+}
+
+.clay-btn-emerald {
+  background-color: #d1fae5;
+  color: #065f46;
+  border-radius: var(--radius-clay-sm);
+  box-shadow: 6px 6px 12px #babecc, -6px -6px 12px #ffffff, inset -3px -3px 6px rgba(6, 95, 70, 0.15), inset 3px 3px 6px rgba(255, 255, 255, 0.7);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+}
+
+.clay-btn-emerald:hover {
+  box-shadow: 8px 8px 16px #babecc, -8px -8px 16px #ffffff, inset -4px -4px 8px rgba(6, 95, 70, 0.2), inset 4px 4px 8px rgba(255, 255, 255, 0.85);
+}
+
+.clay-btn-emerald:active {
+  box-shadow: inset -4px -4px 8px #ffffff, inset 4px 4px 8px #babecc;
+}
+
+.clay-btn-rose {
+  background-color: #ffe4e6;
+  color: #9f1239;
+  border-radius: var(--radius-clay-sm);
+  box-shadow: 6px 6px 12px #babecc, -6px -6px 12px #ffffff, inset -3px -3px 6px rgba(159, 18, 57, 0.15), inset 3px 3px 6px rgba(255, 255, 255, 0.7);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+}
+
+.clay-btn-rose:hover {
+  box-shadow: 8px 8px 16px #babecc, -8px -8px 16px #ffffff, inset -4px -4px 8px rgba(159, 18, 57, 0.2), inset 4px 4px 8px rgba(255, 255, 255, 0.85);
+}
+
+.clay-btn-rose:active {
+  box-shadow: inset -4px -4px 8px #ffffff, inset 4px 4px 8px #babecc;
+}
+
+.clay-input {
+  background-color: #e0e5ec;
+  border-radius: 16px;
+  box-shadow: var(--shadow-clay-input);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  outline: none;
+  font-family: inherit;
+  font-size: 0.95rem;
+  transition: all 0.2s;
+  color: #444444;
+}
+
+.clay-input:focus {
+  background-color: #e3e8f1;
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+.clay-concave {
+  background-color: #e0e5ec;
+  box-shadow: var(--shadow-clay-concave);
+}
+
+.huge-text {
+  font-size: 4.5rem;
+  font-weight: 900;
+  letter-spacing: -2px;
+  line-height: 1;
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #4ade80;
+  box-shadow: 0 0 10px #4ade80;
+}
+
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
