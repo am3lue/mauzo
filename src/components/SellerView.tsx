@@ -90,6 +90,7 @@ export default function SellerView({
   const [checkoutStep, setCheckoutStep] = useState<'cart' | 'calculator'>('cart');
   const [amountReceivedInput, setAmountReceivedInput] = useState<string>('');
   const [isDebt, setIsDebt] = useState<boolean>(false);
+  const [debtInputMode, setDebtInputMode] = useState<'pay_now' | 'debt_amount'>('debt_amount');
   const [debtorName, setDebtorName] = useState<string>('');
   const [debtorPhone, setDebtorPhone] = useState<string>('');
 
@@ -201,18 +202,46 @@ export default function SellerView({
   const cartTotal = cartSubtotal; // Simplicity for retail cash transaction
 
   const amountReceivedNum = parseFloat(amountReceivedInput) || 0;
-  
-  const changeDue = useMemo(() => {
-    if (isDebt) {
-      return 0; // Debt doesn't give positive change back usually, instead is recorded as partial or unpaid
-    }
-    return Math.max(0, amountReceivedNum - cartTotal);
-  }, [amountReceivedNum, cartTotal, isDebt]);
 
-  const debtBalanceRemaining = useMemo(() => {
-    if (!isDebt) return 0;
-    return Math.max(0, cartTotal - amountReceivedNum);
-  }, [amountReceivedNum, cartTotal, isDebt]);
+  const { amountReceived, changeDue, debtBalanceRemaining, debtStatus, debtPaidAmount } = useMemo(() => {
+    if (!isDebt) {
+      const change = Math.max(0, amountReceivedNum - cartTotal);
+      return {
+        amountReceived: amountReceivedNum,
+        changeDue: change,
+        debtBalanceRemaining: 0,
+        debtStatus: undefined,
+        debtPaidAmount: undefined
+      };
+    }
+
+    // It is a debt
+    if (debtInputMode === 'debt_amount') {
+      // Keypad input is the Outstanding Debt amount
+      const inputVal = amountReceivedInput ? parseFloat(amountReceivedInput) : cartTotal; // Defaults to full bill if empty
+      const remaining = Math.min(inputVal, cartTotal);
+      const paidNow = Math.max(0, cartTotal - remaining);
+      return {
+        amountReceived: paidNow,
+        changeDue: 0,
+        debtBalanceRemaining: remaining,
+        debtStatus: remaining === cartTotal ? 'unpaid' : (remaining === 0 ? 'paid' : 'partial'),
+        debtPaidAmount: paidNow
+      };
+    } else {
+      // Keypad input is the Cash Paid Now amount
+      const inputVal = amountReceivedInput ? parseFloat(amountReceivedInput) : 0; // Defaults to 0 if empty
+      const paidNow = Math.min(inputVal, cartTotal);
+      const remaining = Math.max(0, cartTotal - paidNow);
+      return {
+        amountReceived: paidNow,
+        changeDue: 0,
+        debtBalanceRemaining: remaining,
+        debtStatus: remaining === cartTotal ? 'unpaid' : (remaining === 0 ? 'paid' : 'partial'),
+        debtPaidAmount: paidNow
+      };
+    }
+  }, [amountReceivedInput, cartTotal, isDebt, debtInputMode, amountReceivedNum]);
 
   // Calculator Keypad inputs
   const handleKeyPress = (val: string) => {
@@ -251,8 +280,6 @@ export default function SellerView({
       quantity: item.quantity
     }));
 
-    const amountReceived = isDebt ? Math.min(amountReceivedNum, cartTotal) : amountReceivedNum;
-
     const newSale: Sale = {
       id: `sale-${Date.now().toString().slice(-4)}`,
       items: saleItems,
@@ -265,8 +292,8 @@ export default function SellerView({
       isDebt: isDebt,
       debtorName: isDebt ? debtorName.trim() : undefined,
       debtorPhone: isDebt ? debtorPhone.trim() : undefined,
-      debtStatus: isDebt ? (amountReceived === 0 ? 'unpaid' : 'partial') : undefined,
-      debtPaidAmount: isDebt ? amountReceived : undefined,
+      debtStatus: debtStatus,
+      debtPaidAmount: debtPaidAmount,
       synced: false // Saved offline first
     };
 
@@ -651,6 +678,38 @@ export default function SellerView({
                       className="clay-input pl-9 pr-3 py-2 w-full text-xs"
                     />
                   </div>
+
+                  {/* Debt Input Mode Selector */}
+                  <div className="flex p-1 bg-slate-200/60 rounded-xl gap-1 mt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDebtInputMode('debt_amount');
+                        setAmountReceivedInput('');
+                      }}
+                      className={`flex-1 py-1.5 text-[10px] font-bold rounded-lg transition-all ${
+                        debtInputMode === 'debt_amount'
+                          ? 'bg-white shadow-sm text-rose-600 font-black'
+                          : 'text-slate-500 hover:text-slate-700'
+                      }`}
+                    >
+                      Kiasi cha Deni (Debt Amt)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDebtInputMode('pay_now');
+                        setAmountReceivedInput('');
+                      }}
+                      className={`flex-1 py-1.5 text-[10px] font-bold rounded-lg transition-all ${
+                        debtInputMode === 'pay_now'
+                          ? 'bg-white shadow-sm text-emerald-600 font-black'
+                          : 'text-slate-500 hover:text-slate-700'
+                      }`}
+                    >
+                      Kiasi Kilicholipwa Sasa (Pay Now)
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -659,12 +718,17 @@ export default function SellerView({
             <div className="clay-concave p-5 rounded-3xl mb-4 flex flex-col gap-1 items-center justify-center min-h-[140px]">
               {isDebt ? (
                 <>
-                  <span className="text-xs text-rose-500 font-bold tracking-wider block uppercase">Deni Lililosalia (Remaining as Debt)</span>
+                  <span className="text-xs text-rose-500 font-bold tracking-wider block uppercase">
+                    {debtInputMode === 'debt_amount' ? 'Deni Lililosajiliwa (Debt to Record)' : 'Deni Lililosalia (Remaining Debt)'}
+                  </span>
                   <span className={`font-mono text-rose-600 my-3 text-center transition-all duration-150 break-all ${getGiantAdaptiveFontSizeClass(formatMoney(debtBalanceRemaining))}`}>
                     {formatMoney(debtBalanceRemaining)}
                   </span>
                   <span className="text-[10px] text-slate-500 font-medium text-center">
-                    Weka jumla ya kiasi kilichopokelewa hivi sasa ili kukokotoa deni lililosalia.
+                    {debtInputMode === 'debt_amount'
+                      ? 'Kiasi cha deni kitakachosalia. Kilichobaki kitachukuliwa kimeshalipwa sasa hivi.'
+                      : 'Weka kiasi kilicholipwa sasa hivi. Kilichobaki kitasajiliwa kama deni.'
+                    }
                   </span>
                 </>
               ) : (
@@ -685,7 +749,10 @@ export default function SellerView({
             {/* Amount Received Input */}
             <div className="mb-4">
               <label className="text-xs text-slate-500 font-semibold mb-1 block">
-                {isDebt ? 'Kiasi Kilichopokelewa sasa (Money Received)' : 'Kiasi Kilichopokelewa (Cash Received)'}
+                {isDebt 
+                  ? (debtInputMode === 'debt_amount' ? 'Andika Kiasi cha Deni (Debt Amount)' : 'Kiasi Kilichopokelewa sasa (Money Paid Now)')
+                  : 'Kiasi Kilichopokelewa (Cash Received)'
+                }
               </label>
               <div className="relative">
                 <span className="absolute inset-y-0 left-4 flex items-center text-slate-500 font-mono text-sm font-semibold">TSh</span>

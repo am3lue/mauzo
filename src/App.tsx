@@ -93,6 +93,54 @@ export default function App() {
     return localStorage.getItem('mauzo_auth_boss') === 'true';
   });
 
+  const [sessionId, setSessionId] = useState<string | null>(() => {
+    return localStorage.getItem('mauzo_session_id');
+  });
+
+  // Sync session ID to localStorage
+  useEffect(() => {
+    if (sessionId) {
+      localStorage.setItem('mauzo_session_id', sessionId);
+    } else {
+      localStorage.removeItem('mauzo_session_id');
+    }
+  }, [sessionId]);
+
+  // Periodically verify session status directly with server database
+  useEffect(() => {
+    if (!sessionId) return;
+
+    let isMounted = true;
+    const verifySession = async () => {
+      try {
+        const res = await fetch(`/api/auth/session/${sessionId}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (isMounted) {
+            if (!data.isValid) {
+              console.warn("Session is invalid or expired. Logging out...", data.message);
+              setAuthenticatedSellerId(null);
+              setIsBossAuthenticated(false);
+              setSessionId(null);
+            }
+          }
+        }
+      } catch (err) {
+        console.error("Error verifying database session status:", err);
+      }
+    };
+
+    verifySession();
+
+    // Check session status periodically every 30 seconds for real-time multi-device synchronization
+    const interval = setInterval(verifySession, 30000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [sessionId]);
+
   // Save changes to localStorage on any state modification
   useEffect(() => {
     localStorage.setItem('mauzo_products', JSON.stringify(products));
@@ -132,6 +180,69 @@ export default function App() {
       setAuthenticatedSellerId(null);
     }
     setCurrentRole(role);
+  };
+
+  const handleSellerLoginSuccess = async (userId: string) => {
+    setAuthenticatedSellerId(userId);
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          storeCode: workspaceCode,
+          userId,
+          deviceName: navigator.userAgent
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.session) {
+          setSessionId(data.session.sessionId);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to create login session in database:', err);
+    }
+  };
+
+  const handleBossLoginSuccess = async () => {
+    setIsBossAuthenticated(true);
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          storeCode: workspaceCode,
+          userId: 'boss',
+          deviceName: navigator.userAgent
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.session) {
+          setSessionId(data.session.sessionId);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to create login session in database:', err);
+    }
+  };
+
+  const handleLogout = async () => {
+    if (sessionId) {
+      try {
+        await fetch('/api/auth/logout', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId })
+        });
+      } catch (err) {
+        console.error('Failed to logout session in database:', err);
+      }
+    }
+    setAuthenticatedSellerId(null);
+    setIsBossAuthenticated(false);
+    setSessionId(null);
   };
 
   // Calculations
@@ -468,8 +579,8 @@ export default function App() {
                       key={sel.id}
                       onClick={() => {
                         setCurrentSellerIndex(idx);
-                        // Force a fresh login prompt when switching active seller accounts
-                        setAuthenticatedSellerId(null);
+                        // Force a fresh login prompt and clear active database session when switching active seller accounts
+                        handleLogout();
                       }}
                       className={`px-3 py-1.5 text-xs font-semibold rounded-xl transition-all flex items-center gap-1.5 ${
                         currentSellerIndex === idx
@@ -494,13 +605,7 @@ export default function App() {
               (currentRole === 'boss' && isBossAuthenticated)) && (
               <button
                 id="btn-navbar-logout"
-                onClick={() => {
-                  if (currentRole === 'seller') {
-                    setAuthenticatedSellerId(null);
-                  } else {
-                    setIsBossAuthenticated(false);
-                  }
-                }}
+                onClick={handleLogout}
                 className="py-2.5 px-3.5 sm:px-4 rounded-full text-xs font-bold clay-btn bg-white text-rose-600 border border-slate-300/40 hover:bg-rose-50 flex items-center gap-1.5 sm:gap-2 transition-all active:scale-95 shadow-md flex-shrink-0"
                 title="Funga Kipindi / Logout"
               >
@@ -529,7 +634,7 @@ export default function App() {
                 role="seller"
                 activeSeller={activeSeller}
                 sellers={sellers}
-                onLoginSuccess={(userId) => setAuthenticatedSellerId(userId)}
+                onLoginSuccess={handleSellerLoginSuccess}
                 onChangeRole={(newRole) => setCurrentRole(newRole)}
                 currentSellerIndex={currentSellerIndex}
                 onSelectSeller={setCurrentSellerIndex}
@@ -554,7 +659,7 @@ export default function App() {
                 role="boss"
                 activeSeller={activeSeller}
                 sellers={sellers}
-                onLoginSuccess={() => setIsBossAuthenticated(true)}
+                onLoginSuccess={handleBossLoginSuccess}
                 onChangeRole={(newRole) => setCurrentRole(newRole)}
                 currentSellerIndex={currentSellerIndex}
                 onSelectSeller={setCurrentSellerIndex}

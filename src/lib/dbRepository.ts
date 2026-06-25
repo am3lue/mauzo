@@ -26,6 +26,19 @@ export interface IDbRepository {
   releaseLock(storeCode: string, clientId: string): Promise<boolean>;
   getLockOwner(storeCode: string): Promise<LockInfo | null>;
   isHealthy(): Promise<boolean>;
+
+  // New user sessions persistence
+  saveUserSession(session: {
+    sessionId: string;
+    storeCode: string;
+    userId: string;
+    deviceName?: string;
+    status: 'active' | 'logged_out';
+    createdAt: number;
+    expiresAt: number;
+  }): Promise<boolean>;
+  getUserSession(sessionId: string): Promise<any | null>;
+  getUserSessions(storeCode: string, userId?: string): Promise<any[]>;
 }
 
 // ------------------ Turso (libSQL) Implementation ------------------
@@ -44,31 +57,134 @@ export class TursoDbRepository implements IDbRepository {
     if (this.isInitialized) return;
 
     try {
-      // Dynamic, schema-controlled table establishment with error-tolerant indexing
+      // Schema validation & migration check
+      let shouldDropProducts = false;
+      let shouldDropSellingLogs = false;
+      let shouldDropUsers = false;
+
+      try {
+        const prodInfo = await this.client.execute("PRAGMA table_info(products)");
+        const cols = prodInfo.rows.map(r => String(r.name).toLowerCase());
+        if (cols.length > 0 && !cols.includes("price")) {
+          shouldDropProducts = true;
+        }
+      } catch (e) {}
+
+      try {
+        const salesInfo = await this.client.execute("PRAGMA table_info(selling_logs)");
+        const cols = salesInfo.rows.map(r => String(r.name).toLowerCase());
+        if (cols.length > 0 && !cols.includes("items")) {
+          shouldDropSellingLogs = true;
+        }
+      } catch (e) {}
+
+      try {
+        const usersInfo = await this.client.execute("PRAGMA table_info(users)");
+        const cols = usersInfo.rows.map(r => String(r.name).toLowerCase());
+        if (cols.length > 0 && !cols.includes("pin")) {
+          shouldDropUsers = true;
+        }
+      } catch (e) {}
+
+      if (shouldDropProducts) {
+        console.log("⚠️ Old products table structure detected. Recreating...");
+        await this.client.execute("DROP TABLE IF EXISTS products");
+      }
+      if (shouldDropSellingLogs) {
+        console.log("⚠️ Old selling_logs table structure detected. Recreating...");
+        await this.client.execute("DROP TABLE IF EXISTS selling_logs");
+      }
+      if (shouldDropUsers) {
+        console.log("⚠️ Old users table structure detected. Recreating...");
+        await this.client.execute("DROP TABLE IF EXISTS users");
+      }
+
+      // 1. Create products table
       await this.client.execute(`
-        CREATE TABLE IF NOT EXISTS mauzo_sync (
-          store_code TEXT PRIMARY KEY,
-          sales_data TEXT,
-          products_data TEXT,
-          users_data TEXT,
-          updated_at INTEGER
+        CREATE TABLE IF NOT EXISTS products (
+          id TEXT NOT NULL,
+          store_code TEXT NOT NULL,
+          name TEXT NOT NULL,
+          price REAL NOT NULL,
+          category TEXT,
+          image TEXT,
+          stock INTEGER NOT NULL,
+          created_at TEXT,
+          updated_at TEXT,
+          PRIMARY KEY (id, store_code)
         );
       `);
 
-      // Schema drift management: ensure users_data column exists
-      try {
-        await this.client.execute(`ALTER TABLE mauzo_sync ADD COLUMN users_data TEXT;`);
-      } catch (err) {
-        // Ignored. Column is already established.
-      }
-
+      // 2. Create selling_logs table
       await this.client.execute(`
-        CREATE TABLE IF NOT EXISTS mauzo_locks (
+        CREATE TABLE IF NOT EXISTS selling_logs (
+          id TEXT NOT NULL,
+          store_code TEXT NOT NULL,
+          items TEXT,
+          total REAL,
+          amount_received REAL,
+          change_given REAL,
+          seller_id TEXT,
+          seller_name TEXT,
+          created_at TEXT,
+          updated_at TEXT,
+          is_debt INTEGER,
+          debtor_name TEXT,
+          debtor_phone TEXT,
+          debt_status TEXT,
+          debt_paid_amount REAL,
+          PRIMARY KEY (id, store_code)
+        );
+      `);
+
+      // 3. Create users table
+      await this.client.execute(`
+        CREATE TABLE IF NOT EXISTS users (
+          id TEXT NOT NULL,
+          store_code TEXT NOT NULL,
+          name TEXT NOT NULL,
+          role TEXT NOT NULL,
+          pin TEXT,
+          created_at TEXT,
+          PRIMARY KEY (id, store_code)
+        );
+      `);
+
+      // 4. Create locks table
+      await this.client.execute(`
+        CREATE TABLE IF NOT EXISTS locks (
           store_code TEXT PRIMARY KEY,
           client_id TEXT NOT NULL,
           expires_at INTEGER NOT NULL
         );
       `);
+
+      // 5. Create sessions table
+      await this.client.execute(`
+        CREATE TABLE IF NOT EXISTS sessions (
+          store_code TEXT PRIMARY KEY,
+          updated_at INTEGER NOT NULL
+        );
+      `);
+
+      // 6. Create user_sessions table
+      await this.client.execute(`
+        CREATE TABLE IF NOT EXISTS user_sessions (
+          session_id TEXT PRIMARY KEY,
+          store_code TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          device_name TEXT,
+          status TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          expires_at INTEGER NOT NULL
+        );
+      `);
+
+      // Create indexes for fast query routing
+      await this.client.execute(`CREATE INDEX IF NOT EXISTS idx_products_store ON products(store_code);`);
+      await this.client.execute(`CREATE INDEX IF NOT EXISTS idx_selling_logs_store ON selling_logs(store_code);`);
+      await this.client.execute(`CREATE INDEX IF NOT EXISTS idx_users_store ON users(store_code);`);
+      await this.client.execute(`CREATE INDEX IF NOT EXISTS idx_user_sessions_store_user ON user_sessions(store_code, user_id);`);
 
       this.isInitialized = true;
       console.log('✓ Turso (libSQL) Database Repository initialized successfully with active schema.');
@@ -83,22 +199,69 @@ export class TursoDbRepository implements IDbRepository {
     const cleanCode = storeCode.toUpperCase().trim();
 
     try {
-      const result = await this.client.execute({
-        sql: `SELECT sales_data, products_data, users_data, updated_at FROM mauzo_sync WHERE store_code = ?`,
+      // 1. Get products
+      const productsRes = await this.client.execute({
+        sql: `SELECT id, name, price, category, image, stock, created_at, updated_at FROM products WHERE store_code = ?`,
         args: [cleanCode]
       });
+      const products = productsRes.rows.map(row => ({
+        id: row.id,
+        name: row.name,
+        price: row.price,
+        category: row.category,
+        image: row.image,
+        stock: row.stock,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at
+      }));
 
-      if (result.rows.length === 0) {
-        return null;
-      }
+      // 2. Get selling logs
+      const salesRes = await this.client.execute({
+        sql: `SELECT id, items, total, amount_received, change_given, seller_id, seller_name, created_at, updated_at, is_debt, debtor_name, debtor_phone, debt_status, debt_paid_amount FROM selling_logs WHERE store_code = ?`,
+        args: [cleanCode]
+      });
+      const sales = salesRes.rows.map(row => ({
+        id: row.id,
+        items: JSON.parse((row.items as string) || '[]'),
+        total: row.total,
+        amountReceived: row.amount_received,
+        changeGiven: row.change_given,
+        sellerId: row.seller_id,
+        sellerName: row.seller_name,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        isDebt: row.is_debt === 1,
+        debtorName: row.debtor_name || undefined,
+        debtorPhone: row.debtor_phone || undefined,
+        debtStatus: row.debt_status || undefined,
+        debtPaidAmount: row.debt_paid_amount || 0
+      }));
 
-      const row = result.rows[0];
+      // 3. Get users
+      const usersRes = await this.client.execute({
+        sql: `SELECT id, name, role, pin FROM users WHERE store_code = ?`,
+        args: [cleanCode]
+      });
+      const users = usersRes.rows.map(row => ({
+        id: row.id,
+        name: row.name,
+        role: row.role,
+        pin: row.pin || undefined
+      }));
+
+      // 4. Get session updatedAt
+      const sessionRes = await this.client.execute({
+        sql: `SELECT updated_at FROM sessions WHERE store_code = ?`,
+        args: [cleanCode]
+      });
+      const updatedAt = sessionRes.rows.length > 0 ? (sessionRes.rows[0].updated_at as number) : Date.now();
+
       return {
         storeCode: cleanCode,
-        salesData: (row.sales_data as string) || '[]',
-        productsData: (row.products_data as string) || '[]',
-        usersData: (row.users_data as string) || '[]',
-        updatedAt: (row.updated_at as number) || 0
+        salesData: JSON.stringify(sales),
+        productsData: JSON.stringify(products),
+        usersData: JSON.stringify(users),
+        updatedAt
       };
     } catch (err) {
       console.error(`Turso getSyncData failure for ${cleanCode}:`, err);
@@ -116,38 +279,106 @@ export class TursoDbRepository implements IDbRepository {
     const now = Date.now();
 
     try {
-      // Use SQL upsert pattern with secure argument bindings to defend against injection attacks
-      let sql = '';
-      if (column === 'sales_data') {
-        sql = `
-          INSERT INTO mauzo_sync (store_code, sales_data, updated_at)
-          VALUES (?, ?, ?)
-          ON CONFLICT(store_code) DO UPDATE SET
-            sales_data = excluded.sales_data,
-            updated_at = excluded.updated_at
-        `;
-      } else if (column === 'products_data') {
-        sql = `
-          INSERT INTO mauzo_sync (store_code, products_data, updated_at)
-          VALUES (?, ?, ?)
-          ON CONFLICT(store_code) DO UPDATE SET
-            products_data = excluded.products_data,
-            updated_at = excluded.updated_at
-        `;
-      } else {
-        sql = `
-          INSERT INTO mauzo_sync (store_code, users_data, updated_at)
-          VALUES (?, ?, ?)
-          ON CONFLICT(store_code) DO UPDATE SET
-            users_data = excluded.users_data,
-            updated_at = excluded.updated_at
-        `;
+      const records = JSON.parse(dataJson);
+      if (!Array.isArray(records)) {
+        throw new Error('Data payload is not an array');
       }
 
+      if (column === 'sales_data') {
+        // 1. Delete existing sales
+        await this.client.execute({
+          sql: `DELETE FROM selling_logs WHERE store_code = ?`,
+          args: [cleanCode]
+        });
+
+        // 2. Insert new sales
+        for (const s of records) {
+          await this.client.execute({
+            sql: `INSERT INTO selling_logs (
+              id, store_code, items, total, amount_received, change_given, seller_id, seller_name, 
+              created_at, updated_at, is_debt, debtor_name, debtor_phone, debt_status, debt_paid_amount
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            args: [
+              s.id,
+              cleanCode,
+              JSON.stringify(s.items || []),
+              s.total || 0,
+              s.amountReceived || 0,
+              s.changeGiven || 0,
+              s.sellerId || '',
+              s.sellerName || '',
+              s.createdAt,
+              s.updatedAt || s.createdAt,
+              s.isDebt ? 1 : 0,
+              s.debtorName || null,
+              s.debtorPhone || null,
+              s.debtStatus || null,
+              s.debtPaidAmount || 0
+            ]
+          });
+        }
+      } else if (column === 'products_data') {
+        // 1. Delete existing products
+        await this.client.execute({
+          sql: `DELETE FROM products WHERE store_code = ?`,
+          args: [cleanCode]
+        });
+
+        // 2. Insert new products
+        for (const p of records) {
+          await this.client.execute({
+            sql: `INSERT INTO products (
+              id, store_code, name, price, category, image, stock, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            args: [
+              p.id,
+              cleanCode,
+              p.name,
+              p.price || 0,
+              p.category || null,
+              p.image || null,
+              p.stock || 0,
+              p.createdAt,
+              p.updatedAt || p.createdAt
+            ]
+          });
+        }
+      } else if (column === 'users_data') {
+        // 1. Delete existing users
+        await this.client.execute({
+          sql: `DELETE FROM users WHERE store_code = ?`,
+          args: [cleanCode]
+        });
+
+        // 2. Insert new users
+        for (const u of records) {
+          await this.client.execute({
+            sql: `INSERT INTO users (
+              id, store_code, name, role, pin, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)`,
+            args: [
+              u.id,
+              cleanCode,
+              u.name,
+              u.role,
+              u.pin || null,
+              new Date().toISOString()
+            ]
+          });
+        }
+      }
+
+      // 3. Update session updated_at timestamp
       await this.client.execute({
-        sql,
-        args: [cleanCode, dataJson, now]
+        sql: `
+          INSERT INTO sessions (store_code, updated_at)
+          VALUES (?, ?)
+          ON CONFLICT(store_code) DO UPDATE SET
+            updated_at = excluded.updated_at
+        `,
+        args: [cleanCode, now]
       });
+
       return true;
     } catch (err) {
       console.error(`Turso saveSyncData failure for store ${cleanCode} in column ${column}:`, err);
@@ -162,15 +393,15 @@ export class TursoDbRepository implements IDbRepository {
     const expiresAt = now + leaseMs;
 
     try {
-      // 1. Flush stale, expired locks globally to prevent connection deadlock
+      // 1. Flush stale, expired locks
       await this.client.execute({
-        sql: `DELETE FROM mauzo_locks WHERE expires_at < ?`,
+        sql: `DELETE FROM locks WHERE expires_at < ?`,
         args: [now]
       });
 
-      // 2. Query active lock status with parameter safety
+      // 2. Query active lock status
       const current = await this.client.execute({
-        sql: `SELECT client_id, expires_at FROM mauzo_locks WHERE store_code = ?`,
+        sql: `SELECT client_id, expires_at FROM locks WHERE store_code = ?`,
         args: [cleanCode]
       });
 
@@ -183,10 +414,10 @@ export class TursoDbRepository implements IDbRepository {
         }
       }
 
-      // 3. Bind new lock lease ownership with SQL transaction semantics
+      // 3. Bind new lock lease ownership
       await this.client.execute({
         sql: `
-          INSERT INTO mauzo_locks (store_code, client_id, expires_at)
+          INSERT INTO locks (store_code, client_id, expires_at)
           VALUES (?, ?, ?)
           ON CONFLICT(store_code) DO UPDATE SET
             client_id = excluded.client_id,
@@ -208,7 +439,7 @@ export class TursoDbRepository implements IDbRepository {
 
     try {
       const result = await this.client.execute({
-        sql: `DELETE FROM mauzo_locks WHERE store_code = ? AND client_id = ?`,
+        sql: `DELETE FROM locks WHERE store_code = ? AND client_id = ?`,
         args: [cleanCode, clientId]
       });
       return (result.rowsAffected || 0) > 0;
@@ -224,7 +455,7 @@ export class TursoDbRepository implements IDbRepository {
 
     try {
       const result = await this.client.execute({
-        sql: `SELECT client_id, expires_at FROM mauzo_locks WHERE store_code = ?`,
+        sql: `SELECT client_id, expires_at FROM locks WHERE store_code = ?`,
         args: [cleanCode]
       });
 
@@ -243,6 +474,92 @@ export class TursoDbRepository implements IDbRepository {
     }
   }
 
+  async saveUserSession(session: {
+    sessionId: string;
+    storeCode: string;
+    userId: string;
+    deviceName?: string;
+    status: 'active' | 'logged_out';
+    createdAt: number;
+    expiresAt: number;
+  }): Promise<boolean> {
+    await this.initialize();
+    try {
+      await this.client.execute({
+        sql: `
+          INSERT INTO user_sessions (session_id, store_code, user_id, device_name, status, created_at, expires_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(session_id) DO UPDATE SET
+            status = excluded.status,
+            expires_at = excluded.expires_at
+        `,
+        args: [
+          session.sessionId,
+          session.storeCode.toUpperCase(),
+          session.userId,
+          session.deviceName || null,
+          session.status,
+          session.createdAt,
+          session.expiresAt
+        ]
+      });
+      return true;
+    } catch (err) {
+      console.error('Turso saveUserSession error:', err);
+      return false;
+    }
+  }
+
+  async getUserSession(sessionId: string): Promise<any | null> {
+    await this.initialize();
+    try {
+      const result = await this.client.execute({
+        sql: `SELECT session_id, store_code, user_id, device_name, status, created_at, expires_at FROM user_sessions WHERE session_id = ?`,
+        args: [sessionId]
+      });
+      if (result.rows.length === 0) return null;
+      const row = result.rows[0];
+      return {
+        sessionId: row.session_id,
+        storeCode: row.store_code,
+        userId: row.user_id,
+        deviceName: row.device_name,
+        status: row.status,
+        createdAt: row.created_at,
+        expiresAt: row.expires_at
+      };
+    } catch (err) {
+      console.error('Turso getUserSession error:', err);
+      return null;
+    }
+  }
+
+  async getUserSessions(storeCode: string, userId?: string): Promise<any[]> {
+    await this.initialize();
+    const cleanCode = storeCode.toUpperCase().trim();
+    try {
+      let sql = `SELECT session_id, store_code, user_id, device_name, status, created_at, expires_at FROM user_sessions WHERE store_code = ?`;
+      const args: any[] = [cleanCode];
+      if (userId) {
+        sql += ` AND user_id = ?`;
+        args.push(userId);
+      }
+      const result = await this.client.execute({ sql, args });
+      return result.rows.map(row => ({
+        sessionId: row.session_id,
+        storeCode: row.store_code,
+        userId: row.user_id,
+        deviceName: row.device_name,
+        status: row.status,
+        createdAt: row.created_at,
+        expiresAt: row.expires_at
+      }));
+    } catch (err) {
+      console.error('Turso getUserSessions error:', err);
+      return [];
+    }
+  }
+
   async isHealthy(): Promise<boolean> {
     try {
       await this.client.execute(`SELECT 1;`);
@@ -257,6 +574,7 @@ export class TursoDbRepository implements IDbRepository {
 export class FileSystemDbRepository implements IDbRepository {
   private baseDir: string;
   private locks: Map<string, { clientId: string; expiresAt: number }> = new Map();
+  private sessionMap: Map<string, any> = new Map();
 
   constructor(baseDir: string) {
     this.baseDir = baseDir;
@@ -366,6 +684,34 @@ export class FileSystemDbRepository implements IDbRepository {
       clientId: current.clientId,
       expiresAt: current.expiresAt
     };
+  }
+
+  async saveUserSession(session: {
+    sessionId: string;
+    storeCode: string;
+    userId: string;
+    deviceName?: string;
+    status: 'active' | 'logged_out';
+    createdAt: number;
+    expiresAt: number;
+  }): Promise<boolean> {
+    this.sessionMap.set(session.sessionId, { ...session, storeCode: session.storeCode.toUpperCase() });
+    return true;
+  }
+
+  async getUserSession(sessionId: string): Promise<any | null> {
+    return this.sessionMap.get(sessionId) || null;
+  }
+
+  async getUserSessions(storeCode: string, userId?: string): Promise<any[]> {
+    const cleanCode = storeCode.toUpperCase().trim();
+    const all = Array.from(this.sessionMap.values());
+    return all.filter(s => {
+      const matchStore = s.storeCode === cleanCode;
+      if (!matchStore) return false;
+      if (userId) return s.userId === userId;
+      return true;
+    });
   }
 
   async isHealthy(): Promise<boolean> {

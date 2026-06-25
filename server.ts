@@ -8,6 +8,26 @@ import { getDbRepository } from './src/lib/dbRepository.js';
 import { getStorageAdapter } from './src/lib/storageAdapter.js';
 import { rateLimitMiddleware, requestSizeVerification } from './src/lib/rateLimiter.js';
 
+// Modular server-side sync handlers mapping to SQL queries
+import {
+  getSalesHandler,
+  saveSalesHandler,
+  getProductsHandler,
+  saveProductsHandler,
+  getUsersHandler,
+  saveUsersHandler,
+  acquireLockHandler,
+  releaseLockHandler
+} from './src/server/syncHandlers.js';
+
+// Server-side session handlers mapping login/logout state to SQL queries
+import {
+  loginSessionHandler,
+  logoutSessionHandler,
+  checkSessionHandler,
+  getActiveSessionsHandler
+} from './src/server/session.js';
+
 const PORT = 3000;
 const app = express();
 
@@ -107,7 +127,7 @@ app.post('/api/sync/:code/lock', rateLimitMiddleware('write'), async (req, res) 
 
   try {
     const leaseMs = 20000; // Standardized lease window (20 seconds)
-    const result = await db.acquireLock(code, clientId, leaseMs);
+    const result = await acquireLockHandler(code, clientId, leaseMs);
 
     if (result.success) {
       return res.json({ success: true, message: 'Lock imepatikana/imeratibiwa kikamilifu.' });
@@ -134,7 +154,7 @@ app.post('/api/sync/:code/unlock', rateLimitMiddleware('write'), async (req, res
   }
 
   try {
-    const released = await db.releaseLock(code, clientId);
+    const released = await releaseLockHandler(code, clientId);
     return res.json({ success: released, message: released ? 'Lock imeachiliwa.' : 'Hukuwa mmiliki wa lock au lock ishafutika.' });
   } catch (err: any) {
     console.error(`Unlock routine failure for store ${code}:`, err);
@@ -146,11 +166,8 @@ app.post('/api/sync/:code/unlock', rateLimitMiddleware('write'), async (req, res
 app.get('/api/sync/:code/sales', rateLimitMiddleware('general'), async (req, res) => {
   const { code } = req.params;
   try {
-    const data = await db.getSyncData(code);
-    if (data && data.salesData) {
-      return res.json(JSON.parse(data.salesData));
-    }
-    return res.json([]);
+    const data = await getSalesHandler(code);
+    return res.json(data);
   } catch (err: any) {
     console.error(`Fetch sales failure for ${code}:`, err);
     res.status(500).json({ error: 'Inashindwa kusoma data ya mauzo.' });
@@ -169,8 +186,7 @@ app.put('/api/sync/:code/sales',
     }
 
     try {
-      const dataJson = JSON.stringify(salesPayload);
-      const success = await db.saveSyncData(code, 'sales_data', dataJson);
+      const success = await saveSalesHandler(code, salesPayload);
       if (success) {
         return res.json({ status: 'success', count: salesPayload.length });
       }
@@ -186,11 +202,8 @@ app.put('/api/sync/:code/sales',
 app.get('/api/sync/:code/products', rateLimitMiddleware('general'), async (req, res) => {
   const { code } = req.params;
   try {
-    const data = await db.getSyncData(code);
-    if (data && data.productsData) {
-      return res.json(JSON.parse(data.productsData));
-    }
-    return res.json([]);
+    const data = await getProductsHandler(code);
+    return res.json(data);
   } catch (err: any) {
     console.error(`Fetch products failure for ${code}:`, err);
     res.status(500).json({ error: 'Inashindwa kusoma data ya bidhaa.' });
@@ -209,8 +222,7 @@ app.put('/api/sync/:code/products',
     }
 
     try {
-      const dataJson = JSON.stringify(productsPayload);
-      const success = await db.saveSyncData(code, 'products_data', dataJson);
+      const success = await saveProductsHandler(code, productsPayload);
       if (success) {
         return res.json({ status: 'success', count: productsPayload.length });
       }
@@ -226,11 +238,8 @@ app.put('/api/sync/:code/products',
 app.get('/api/sync/:code/users', rateLimitMiddleware('general'), async (req, res) => {
   const { code } = req.params;
   try {
-    const data = await db.getSyncData(code);
-    if (data && data.usersData) {
-      return res.json(JSON.parse(data.usersData));
-    }
-    return res.json([]);
+    const data = await getUsersHandler(code);
+    return res.json(data);
   } catch (err: any) {
     console.error(`Fetch users failure for ${code}:`, err);
     res.status(500).json({ error: 'Inashindwa kusoma data ya watumiaji.' });
@@ -249,8 +258,7 @@ app.put('/api/sync/:code/users',
     }
 
     try {
-      const dataJson = JSON.stringify(usersPayload);
-      const success = await db.saveSyncData(code, 'users_data', dataJson);
+      const success = await saveUsersHandler(code, usersPayload);
       if (success) {
         return res.json({ status: 'success', count: usersPayload.length });
       }
@@ -261,6 +269,69 @@ app.put('/api/sync/:code/users',
     }
   }
 );
+
+// ------------------ Multi-Device User Session Persistency APIs ------------------
+
+// POST /api/auth/login
+app.post('/api/auth/login', rateLimitMiddleware('general'), async (req, res) => {
+  const { storeCode, userId, deviceName } = req.body;
+  if (!storeCode || !userId) {
+    return res.status(400).json({ error: 'storeCode na userId zinahitajika.' });
+  }
+
+  try {
+    const session = await loginSessionHandler(storeCode, userId, deviceName);
+    if (session) {
+      return res.json({ success: true, session });
+    }
+    return res.status(500).json({ error: 'Imeshindwa kuanzisha session kwenye database.' });
+  } catch (err: any) {
+    console.error('Login session endpoint error:', err);
+    res.status(500).json({ error: 'Mtatizo ya kiufundi kwenye server.' });
+  }
+});
+
+// POST /api/auth/logout
+app.post('/api/auth/logout', rateLimitMiddleware('general'), async (req, res) => {
+  const { sessionId } = req.body;
+  if (!sessionId) {
+    return res.status(400).json({ error: 'sessionId inahitajika.' });
+  }
+
+  try {
+    const success = await logoutSessionHandler(sessionId);
+    return res.json({ success });
+  } catch (err: any) {
+    console.error('Logout session endpoint error:', err);
+    res.status(500).json({ error: 'Mtatizo ya kiufundi kwenye server.' });
+  }
+});
+
+// GET /api/auth/session/:sessionId
+app.get('/api/auth/session/:sessionId', rateLimitMiddleware('general'), async (req, res) => {
+  const { sessionId } = req.params;
+  try {
+    const status = await checkSessionHandler(sessionId);
+    return res.json(status);
+  } catch (err: any) {
+    console.error('Check session endpoint error:', err);
+    res.status(500).json({ error: 'Mtatizo ya kiufundi kwenye server.' });
+  }
+});
+
+// GET /api/auth/sessions/:code
+app.get('/api/auth/sessions/:code', rateLimitMiddleware('general'), async (req, res) => {
+  const { code } = req.params;
+  const { userId } = req.query;
+
+  try {
+    const sessions = await getActiveSessionsHandler(code, userId ? String(userId) : undefined);
+    return res.json(sessions);
+  } catch (err: any) {
+    console.error('Get active sessions endpoint error:', err);
+    res.status(500).json({ error: 'Mtatizo ya kiufundi kwenye server.' });
+  }
+});
 
 // ------------------ Vite & Static Asset Setup ------------------
 async function startServer() {
