@@ -628,6 +628,8 @@ export default function App() {
                 currentSeller={activeSeller}
                 onAddSale={handleAddSale}
                 onUpdateStocks={handleUpdateStocks}
+                onSyncSales={handleSyncDatabases}
+                isSyncing={isSyncing}
               />
             ) : (
               <LoginScreen

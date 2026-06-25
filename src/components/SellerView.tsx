@@ -14,7 +14,9 @@ import {
   X,
   CreditCard,
   CloudLightning,
-  Coins
+  Coins,
+  RefreshCw,
+  Database
 } from 'lucide-react';
 import { Product, Sale, CartItem, SaleItem, User as SellerUser } from '../types';
 import ProductIcon from './ProductIcon';
@@ -50,6 +52,8 @@ interface SellerViewProps {
   currentSeller: SellerUser;
   onAddSale: (sale: Sale) => void;
   onUpdateStocks: (items: { productId: string; quantity: number }[]) => void;
+  onSyncSales?: () => Promise<void>;
+  isSyncing?: boolean;
 }
 
 export default function SellerView({ 
@@ -57,7 +61,9 @@ export default function SellerView({
   sales, 
   currentSeller, 
   onAddSale, 
-  onUpdateStocks 
+  onUpdateStocks,
+  onSyncSales,
+  isSyncing = false
 }: SellerViewProps) {
   // Search and Filter State
   const [searchQuery, setSearchQuery] = useState('');
@@ -364,9 +370,38 @@ export default function SellerView({
             />
           </div>
 
-          <div className="flex items-center gap-2 text-xs font-mono text-slate-500 bg-slate-200/50 px-4 py-2 rounded-2xl">
-            <Coins size={14} className="text-amber-500" />
-            <span>Keshia: <strong className="text-slate-800">{currentSeller.name}</strong></span>
+          <div className="flex flex-wrap items-center gap-2.5">
+            <div className="flex items-center gap-2 text-xs font-mono text-slate-500 bg-slate-200/50 px-4 py-2 rounded-2xl">
+              <Coins size={14} className="text-amber-500" />
+              <span>Keshia: <strong className="text-slate-800">{currentSeller.name}</strong></span>
+            </div>
+
+            {/* Cloud Database Logs Sync Status */}
+            {onSyncSales && (
+              <button
+                type="button"
+                onClick={onSyncSales}
+                disabled={isSyncing}
+                title="Bofya hapa kutuma mauzo yote kwenye database"
+                className={`flex items-center gap-2 text-xs font-mono px-4 py-2 rounded-2xl transition-all border ${
+                  isSyncing
+                    ? 'bg-amber-100 text-amber-700 border-amber-200'
+                    : sales.some(s => !s.synced)
+                      ? 'bg-rose-100 text-rose-700 border-rose-200 hover:scale-105 active:scale-95 cursor-pointer font-bold animate-pulse'
+                      : 'bg-emerald-100 text-emerald-700 border-emerald-200 hover:scale-105 active:scale-95 cursor-pointer'
+                }`}
+              >
+                <RefreshCw size={13} className={isSyncing ? 'animate-spin' : ''} />
+                <span>
+                  {isSyncing 
+                    ? 'Inatuma...' 
+                    : sales.some(s => !s.synced)
+                      ? `Tuma Mauzo Database (${sales.filter(s => !s.synced).length})`
+                      : 'Database Ipo Sawa'
+                  }
+                </span>
+              </button>
+            )}
           </div>
         </div>
 
