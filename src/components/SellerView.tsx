@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Search, 
   ShoppingCart, 
@@ -18,6 +18,31 @@ import {
 } from 'lucide-react';
 import { Product, Sale, CartItem, SaleItem, User as SellerUser } from '../types';
 import ProductIcon from './ProductIcon';
+
+// Helper to scale font size based on text length for Jumla indicator
+const getAdaptiveFontSizeClass = (text: string) => {
+  const len = text.length;
+  if (len <= 10) return 'text-2xl sm:text-3xl';
+  if (len <= 14) return 'text-xl sm:text-2xl';
+  return 'text-lg sm:text-xl';
+};
+
+// Helper to scale font size based on text length for Giant Calculator Output
+const getGiantAdaptiveFontSizeClass = (text: string) => {
+  const len = text.length;
+  if (len <= 10) return 'text-4xl sm:text-5xl md:text-6xl font-black leading-none';
+  if (len <= 14) return 'text-3xl sm:text-4xl md:text-5xl font-black leading-none';
+  if (len <= 18) return 'text-2xl sm:text-3xl md:text-4xl font-extrabold leading-none';
+  return 'text-xl sm:text-2xl md:text-3xl font-bold leading-none';
+};
+
+// Helper to scale font size based on text length for cash received input field
+const getInputAdaptiveFontSizeClass = (text: string) => {
+  const len = text.length;
+  if (len <= 10) return 'text-lg sm:text-xl';
+  if (len <= 14) return 'text-base sm:text-lg';
+  return 'text-xs sm:text-sm';
+};
 
 interface SellerViewProps {
   products: Product[];
@@ -40,6 +65,26 @@ export default function SellerView({
 
   // Cart State
   const [cart, setCart] = useState<CartItem[]>([]);
+
+  // Mobile active sub-tab state
+  const [mobileActiveTab, setMobileActiveTab] = useState<'products' | 'cart'>('products');
+
+  // Floating UI Scroll Tracking for Mobile/Tablet Search and Cart Navigation
+  const [showFloatingControls, setShowFloatingControls] = useState(false);
+  const [floatingSearchActive, setFloatingSearchActive] = useState(false);
+
+  useEffect(() => {
+    const handleScroll = () => {
+      if (window.scrollY > 150) {
+        setShowFloatingControls(true);
+      } else {
+        setShowFloatingControls(false);
+        setFloatingSearchActive(false);
+      }
+    };
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
 
   // Checkout State
   const [checkoutStep, setCheckoutStep] = useState<'cart' | 'calculator'>('cart');
@@ -108,6 +153,35 @@ export default function SellerView({
         return item;
       }).filter(Boolean) as CartItem[];
     });
+  };
+
+  const handleQuantityInputChange = (productId: string, value: string) => {
+    const cleanVal = value.replace(/[^0-9]/g, '');
+    if (cleanVal === '') {
+      setCart(prev => prev.map(item => 
+        item.product.id === productId ? { ...item, quantity: 0 } : item
+      ));
+      return;
+    }
+    const num = parseInt(cleanVal, 10);
+    const item = cart.find(i => i.product.id === productId);
+    if (!item) return;
+
+    const allowedQty = Math.min(num, item.product.stock);
+    setCart(prev => prev.map(i => 
+      i.product.id === productId ? { ...i, quantity: allowedQty } : i
+    ));
+  };
+
+  const handleQuantityInputBlur = (productId: string) => {
+    setCart(prev => prev.map(item => {
+      if (item.product.id === productId) {
+        if (item.quantity <= 0) {
+          return { ...item, quantity: 1 };
+        }
+      }
+      return item;
+    }));
   };
 
   const clearCart = () => {
@@ -211,9 +285,41 @@ export default function SellerView({
   };
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-      {/* Search, Categories, & Products Area */}
-      <div className="lg:col-span-8 flex flex-col gap-6">
+    <div className="flex flex-col gap-4 w-full">
+      {/* Mobile view sub-tabs switcher */}
+      <div className="sticky top-1.5 z-30 flex lg:hidden items-center justify-between p-1.5 bg-[#e0e5ec]/90 backdrop-blur-md rounded-2xl shadow-md border border-white/40 mb-2 transition-all">
+        <button
+          onClick={() => setMobileActiveTab('products')}
+          className={`flex-1 py-3 text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-2 ${
+            mobileActiveTab === 'products'
+              ? 'bg-white text-indigo-700 shadow-sm font-black'
+              : 'text-slate-500 hover:text-slate-700'
+          }`}
+        >
+          <span>Bidhaa ({filteredProducts.length})</span>
+        </button>
+        <button
+          onClick={() => setMobileActiveTab('cart')}
+          className={`flex-1 py-3 text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-2 relative ${
+            mobileActiveTab === 'cart'
+              ? 'bg-white text-indigo-700 shadow-sm font-black'
+              : 'text-slate-500 hover:text-slate-700'
+          }`}
+        >
+          <span>Kikapu cha Mauzo</span>
+          {cart.length > 0 ? (
+            <span className="bg-rose-500 text-white text-[10px] font-black w-5 h-5 rounded-full flex items-center justify-center shadow-sm">
+              {cart.reduce((sum, item) => sum + item.quantity, 0)}
+            </span>
+          ) : (
+            <span className="text-slate-400 font-normal">(0)</span>
+          )}
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+        {/* Search, Categories, & Products Area */}
+        <div className={`lg:col-span-8 flex flex-col gap-6 ${mobileActiveTab === 'products' ? 'flex' : 'hidden lg:flex'}`}>
         
         {/* Search header container styled clean and simple */}
         <div className="clay-card p-6 flex flex-col md:flex-row gap-4 items-center justify-between">
@@ -279,52 +385,64 @@ export default function SellerView({
                 id={`prod-card-${product.id}`}
                 key={product.id}
                 onClick={() => remainingStock > 0 && addToCart(product)}
-                className={`clay-card p-5 flex flex-col justify-between transition-all cursor-pointer select-none group border border-transparent ${
+                className={`clay-card p-4.5 flex flex-col justify-between transition-all cursor-pointer select-none group border border-transparent ${
                   isOutOfStock 
-                    ? 'opacity-60 cursor-not-allowed bg-slate-100' 
+                    ? 'opacity-60 cursor-not-allowed bg-slate-100/80' 
                     : 'hover:border-indigo-200 active:scale-95'
                 }`}
               >
                 <div>
-                  <div className="flex justify-between items-start mb-4">
-                    <ProductIcon type={product.image} />
-                    <span className={`text-[11px] font-mono font-medium px-2.5 py-1 rounded-full ${
+                  {/* Visual Image Container with good spacing */}
+                  <div className="w-full h-36 bg-gradient-to-b from-slate-50 to-slate-100 rounded-2xl flex items-center justify-center overflow-hidden mb-4 relative border border-slate-200/40 shadow-inner group-hover:scale-[1.01] transition-transform duration-200">
+                    <span className={`absolute top-2.5 right-2.5 z-10 text-[10px] font-mono font-bold px-2.5 py-1 rounded-full shadow-sm backdrop-blur-md border ${
                       remainingStock > 10 
-                        ? 'bg-slate-200 text-slate-700' 
+                        ? 'bg-white/90 text-slate-700 border-slate-200' 
                         : remainingStock > 0 
-                        ? 'bg-amber-100 text-amber-700 border border-amber-200' 
-                        : 'bg-rose-100 text-rose-700 border border-rose-200'
+                        ? 'bg-amber-50/90 text-amber-700 border-amber-200/30' 
+                        : 'bg-rose-50/90 text-rose-700 border-rose-200/30'
                     }`}>
                       {remainingStock > 0 ? `${remainingStock} Stock` : 'Mwisho (Out)'}
                     </span>
+
+                    <div className="w-20 h-20 flex items-center justify-center transform group-hover:scale-105 transition-transform duration-300">
+                      <ProductIcon type={product.image} className="w-10 h-10" size={40} fullSize />
+                    </div>
                   </div>
 
-                  <h3 className="font-sans font-medium text-slate-800 text-base mb-1 group-hover:text-indigo-600 transition-colors">
+                  {/* Words (Category and Name) details */}
+                  <span className="text-[10px] uppercase tracking-wider font-extrabold text-indigo-600/85 bg-indigo-50/60 px-2 py-0.5 rounded-md mb-1.5 inline-block">
+                    {product.category}
+                  </span>
+                  
+                  <h3 className="font-sans font-bold text-slate-800 text-sm sm:text-base mb-3 leading-snug group-hover:text-indigo-600 transition-colors">
                     {product.name}
                   </h3>
-                  <p className="text-xs text-slate-400 mb-3 font-medium">{product.category}</p>
                 </div>
 
-                <div className="flex items-center justify-between mt-2 pt-2 border-t border-slate-100">
-                  <span className="font-mono text-lg font-bold text-slate-800">
-                    {formatMoney(product.price)}
-                  </span>
+                {/* Price and Add Button Container */}
+                <div className="flex items-center justify-between mt-1 pt-2.5 border-t border-slate-100">
+                  <div className="flex flex-col">
+                    <span className="text-[9px] text-slate-400 font-bold uppercase tracking-wider">Bei / Price</span>
+                    <span className="font-mono text-base sm:text-lg font-black text-slate-800">
+                      {formatMoney(product.price)}
+                    </span>
+                  </div>
 
                   <button
                     id={`add-btn-${product.id}`}
                     disabled={remainingStock <= 0}
                     className={`p-2.5 rounded-2xl flex items-center justify-center transition-all ${
                       remainingStock > 0 
-                        ? 'clay-btn-indigo text-indigo-600 hover:scale-105' 
+                        ? 'clay-btn-indigo text-indigo-600 hover:scale-105 shadow-sm' 
                         : 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-inner'
                     }`}
                   >
                     {qtyInCart > 0 ? (
-                      <span className="text-sm font-bold bg-indigo-600 text-white w-6 h-6 rounded-full flex items-center justify-center shadow-md">
+                      <span className="text-xs font-black bg-indigo-600 text-white w-6 h-6 rounded-full flex items-center justify-center shadow-md">
                         {qtyInCart}
                       </span>
                     ) : (
-                      <Plus size={18} />
+                      <Plus size={16} />
                     )}
                   </button>
                 </div>
@@ -345,7 +463,7 @@ export default function SellerView({
       </div>
 
       {/* Cart & Checkout Panel Column */}
-      <div className="lg:col-span-4 sticky top-6 flex flex-col gap-6">
+      <div className={`lg:col-span-4 sticky top-6 flex flex-col gap-6 ${mobileActiveTab === 'cart' ? 'flex' : 'hidden lg:flex'}`}>
         
         {checkoutStep === 'cart' ? (
           /* CART PREVIEW PANEL */
@@ -367,7 +485,7 @@ export default function SellerView({
             </div>
 
             {/* Cart Items List */}
-            <div className="flex-1 overflow-y-auto pr-1 space-y-4 max-h-[360px] no-scrollbar">
+            <div className="flex-1 overflow-y-auto pr-1 space-y-4 max-h-[380px] pb-36 no-scrollbar">
               {cart.map(item => (
                 <div 
                   id={`cart-item-${item.product.id}`}
@@ -379,23 +497,31 @@ export default function SellerView({
                     <p className="text-xs font-mono text-slate-400">{formatMoney(item.product.price)} × {item.quantity}</p>
                   </div>
                   
-                  <div className="flex items-center gap-2.5">
+                  <div className="flex items-center gap-2">
                     <button
                       id={`cart-minus-${item.product.id}`}
                       onClick={() => updateQuantity(item.product.id, -1)}
-                      className="w-7 h-7 rounded-lg bg-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-300 shadow-inner transition-all hover:scale-105 active:scale-95"
+                      className="w-8 h-8 rounded-lg bg-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-300 shadow-inner transition-all hover:scale-105 active:scale-95 flex-shrink-0"
                     >
-                      <Minus size={14} />
+                      <Minus size={13} />
                     </button>
-                    <span className="font-mono text-sm font-bold text-slate-800 w-4 text-center">
-                      {item.quantity}
-                    </span>
+                    
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      value={item.quantity === 0 ? '' : item.quantity}
+                      onChange={(e) => handleQuantityInputChange(item.product.id, e.target.value)}
+                      onBlur={() => handleQuantityInputBlur(item.product.id)}
+                      className="font-mono text-sm font-bold text-slate-800 w-11 h-8 text-center bg-slate-100 rounded-lg shadow-inner border border-slate-300/20 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:bg-white transition-all"
+                    />
+
                     <button
                       id={`cart-plus-${item.product.id}`}
                       onClick={() => updateQuantity(item.product.id, 1)}
-                      className="w-7 h-7 rounded-lg bg-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-300 shadow-inner transition-all hover:scale-105 active:scale-95"
+                      className="w-8 h-8 rounded-lg bg-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-300 shadow-inner transition-all hover:scale-105 active:scale-95 flex-shrink-0"
                     >
-                      <Plus size={14} />
+                      <Plus size={13} />
                     </button>
                   </div>
                 </div>
@@ -463,9 +589,11 @@ export default function SellerView({
             </div>
 
             {/* Total Indicator */}
-            <div className="clay-concave p-4 rounded-2xl mb-4 text-center">
+            <div className="clay-concave p-4 rounded-2xl mb-4 text-center min-h-[84px] flex flex-col justify-center">
               <span className="text-xs text-slate-500 font-semibold block mb-0.5 uppercase tracking-wider">Jumla ya Malipo</span>
-              <span className="font-mono text-2xl font-black text-slate-800">{formatMoney(cartTotal)}</span>
+              <span className={`font-mono font-black text-slate-800 transition-all duration-150 ${getAdaptiveFontSizeClass(formatMoney(cartTotal))}`}>
+                {formatMoney(cartTotal)}
+              </span>
             </div>
 
             {/* DEBT TRACKER SECTION */}
@@ -528,11 +656,11 @@ export default function SellerView({
             </div>
 
             {/* Giant Calculator Output */}
-            <div className="clay-concave p-5 rounded-3xl mb-4 flex flex-col gap-1 items-center justify-center">
+            <div className="clay-concave p-5 rounded-3xl mb-4 flex flex-col gap-1 items-center justify-center min-h-[140px]">
               {isDebt ? (
                 <>
                   <span className="text-xs text-rose-500 font-bold tracking-wider block uppercase">Deni Lililosalia (Remaining as Debt)</span>
-                  <span className="font-mono huge-text text-rose-600 my-3">
+                  <span className={`font-mono text-rose-600 my-3 text-center transition-all duration-150 break-all ${getGiantAdaptiveFontSizeClass(formatMoney(debtBalanceRemaining))}`}>
                     {formatMoney(debtBalanceRemaining)}
                   </span>
                   <span className="text-[10px] text-slate-500 font-medium text-center">
@@ -542,7 +670,7 @@ export default function SellerView({
               ) : (
                 <>
                   <span className="text-xs text-emerald-600 font-bold tracking-wider block uppercase">Chenji ya Kurudisha (Change Return)</span>
-                  <span className="font-mono huge-text text-emerald-600 my-3">
+                  <span className={`font-mono text-emerald-600 my-3 text-center transition-all duration-150 break-all ${getGiantAdaptiveFontSizeClass(formatMoney(changeDue))}`}>
                     {formatMoney(changeDue)}
                   </span>
                   {amountReceivedNum < cartTotal && amountReceivedNum > 0 && (
@@ -567,7 +695,7 @@ export default function SellerView({
                   readOnly
                   placeholder="0"
                   value={amountReceivedInput ? parseFloat(amountReceivedInput).toLocaleString() : ''}
-                  className="clay-input pl-12 pr-10 py-3 w-full text-right font-mono text-lg font-bold text-slate-800"
+                  className={`clay-input pl-12 pr-10 py-3 w-full text-right font-mono font-bold text-slate-800 transition-all duration-150 ${getInputAdaptiveFontSizeClass(amountReceivedInput ? parseFloat(amountReceivedInput).toLocaleString() : '0')}`}
                 />
                 {amountReceivedInput && (
                   <button 
@@ -759,6 +887,63 @@ export default function SellerView({
           </div>
         </div>
       )}
+
+      {/* Floating Top-Right Search Lens for Mobile/Tablet */}
+      {showFloatingControls && (
+        <div className="fixed top-3.5 right-3.5 z-50 flex items-center gap-2 lg:hidden">
+          {floatingSearchActive ? (
+            <div className="flex items-center gap-2 bg-[#e0e5ec]/95 backdrop-blur-lg px-3 py-1.5 rounded-2xl shadow-lg border border-white/60 animate-in slide-in-from-right duration-200">
+              <input
+                type="text"
+                placeholder="Tafuta bidhaa hapa..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="bg-transparent border-none outline-none text-xs font-sans w-32 sm:w-44 text-slate-800"
+                autoFocus
+              />
+              <button 
+                onClick={() => { 
+                  setFloatingSearchActive(false); 
+                  setSearchQuery(''); 
+                }}
+                className="p-1 hover:bg-slate-300/40 rounded-lg transition-all"
+              >
+                <X size={14} className="text-slate-500 hover:text-slate-800" />
+              </button>
+            </div>
+          ) : null}
+          <button
+            onClick={() => {
+              setFloatingSearchActive(!floatingSearchActive);
+              setMobileActiveTab('products');
+            }}
+            className={`w-11 h-11 bg-indigo-600 hover:bg-indigo-700 text-white rounded-full shadow-lg active:scale-95 transition-all flex items-center justify-center ${
+              floatingSearchActive ? 'bg-indigo-700 ring-2 ring-indigo-300' : ''
+            }`}
+          >
+            <Search size={18} />
+          </button>
+        </div>
+      )}
+
+      {/* Floating Bottom-Right Cart FAB for Phone and Tablet */}
+      {mobileActiveTab === 'products' && (
+        <button
+          onClick={() => setMobileActiveTab('cart')}
+          className="fixed bottom-6 right-6 z-40 lg:hidden flex items-center justify-center w-14 h-14 bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700 text-white rounded-full shadow-2xl hover:scale-105 active:scale-95 transition-all border border-emerald-400/20"
+          id="floating-cart-fab"
+        >
+          <div className="relative">
+            <ShoppingCart size={24} />
+            {cart.length > 0 && (
+              <span className="absolute -top-3.5 -right-3.5 bg-rose-500 text-white text-[11px] font-black min-w-[20px] h-5 rounded-full px-1.5 flex items-center justify-center shadow-md animate-bounce">
+                {cart.reduce((sum, item) => sum + item.quantity, 0)}
+              </span>
+            )}
+          </div>
+        </button>
+      )}
     </div>
+  </div>
   );
 }

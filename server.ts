@@ -2,494 +2,267 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
-import { createClient } from '@libsql/client';
 
-const STORAGE_DIR = '/tmp/mauzo_sync_store';
-const IMAGES_DIR = path.join(STORAGE_DIR, 'images');
+// Architectural repository, adapter, and rate limiter imports
+import { getDbRepository } from './src/lib/dbRepository.js';
+import { getStorageAdapter } from './src/lib/storageAdapter.js';
+import { rateLimitMiddleware, requestSizeVerification } from './src/lib/rateLimiter.js';
 
-// Ensure writable storage directory & local image backup storage exists
-if (!fs.existsSync(STORAGE_DIR)) {
-  fs.mkdirSync(STORAGE_DIR, { recursive: true });
-}
-if (!fs.existsSync(IMAGES_DIR)) {
-  fs.mkdirSync(IMAGES_DIR, { recursive: true });
-}
-
-// Memory lock storage fallback for when Turso is not being used
-interface LockInfo {
-  clientId: string;
-  expiresAt: number;
-}
-const currentLocks = new Map<string, LockInfo>();
-
-// ------------------ Turso Database Configuration ------------------
-let libsqlClient: ReturnType<typeof createClient> | null = null;
-let tablesEnsured = false;
-
-function getLibsqlClient() {
-  if (!libsqlClient) {
-    const url = process.env.TURSO_DATABASE_URL;
-    const token = process.env.TURSO_AUTH_TOKEN;
-    if (url && url.trim()) {
-      libsqlClient = createClient({
-        url: url.trim(),
-        authToken: token ? token.trim() : undefined,
-      });
-      console.log('Turso client initialized with URL:', url.trim());
-    }
-  }
-  return libsqlClient;
-}
-
-async function getActiveClient() {
-  const client = getLibsqlClient();
-  if (!client) return null;
-
-  if (!tablesEnsured) {
-    try {
-      // Create schema dynamically on first use if not already constructed in the SQLite cloud
-      await client.execute(`
-        CREATE TABLE IF NOT EXISTS mauzo_sync (
-          store_code TEXT PRIMARY KEY,
-          sales_data TEXT,
-          products_data TEXT,
-          users_data TEXT,
-          updated_at INTEGER
-        );
-      `);
-      
-      // Try to alter table in case database is already provisioned
-      try {
-        await client.execute(`ALTER TABLE mauzo_sync ADD COLUMN users_data TEXT;`);
-      } catch (e) {
-        // Column probably already exists, which is expected
-      }
-
-      await client.execute(`
-        CREATE TABLE IF NOT EXISTS mauzo_locks (
-          store_code TEXT PRIMARY KEY,
-          client_id TEXT NOT NULL,
-          expires_at INTEGER NOT NULL
-        );
-      `);
-      tablesEnsured = true;
-      console.log('Turso database tables verified and ensured.');
-    } catch (err) {
-      console.error('Error during Turso schema verification:', err);
-    }
-  }
-  return client;
-}
-
-// ------------------ File System Storage Fallback Helper ------------------
-function getSyncFilePath(code: string, prefix: string): string {
-  const sanitizedCode = code.replace(/[^a-zA-Z0-9-]/g, '').trim().toUpperCase();
-  return path.join(STORAGE_DIR, `mzo_${sanitizedCode}_${prefix}.json`);
-}
-
-function readSyncDataFromFile(code: string, prefix: string): any[] {
-  const filePath = getSyncFilePath(code, prefix);
-  if (fs.existsSync(filePath)) {
-    try {
-      const text = fs.readFileSync(filePath, 'utf-8');
-      if (text && text.trim()) {
-        return JSON.parse(text);
-      }
-    } catch (e) {
-      console.error(`Error reading flat file ${prefix} for ${code}:`, e);
-    }
-  }
-  return [];
-}
-
-function writeSyncDataToFile(code: string, prefix: string, data: any[]): void {
-  const filePath = getSyncFilePath(code, prefix);
-  try {
-    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
-  } catch (e) {
-    console.error(`Error writing flat file ${prefix} for ${code}:`, e);
-  }
-}
-
-// ------------------ Express Server Integration ------------------
-const app = express();
 const PORT = 3000;
+const app = express();
 
-// JSON Body Parser with robust limits for base64 image transfers
+// Set up security headers middleware
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  next();
+});
+
+// JSON and URL-encoded payload Parsers with secure ceiling limits (max 15MB base64 transfers)
 app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 
-// API endpoints for direct, CORS-free multi-tab/multi-device Sync
-app.get('/api/health', async (req, res) => {
-  const client = await getActiveClient();
-  res.json({
-    status: 'ok',
-    hasImgbbKey: !!process.env.IMGBB_API_KEY,
-    hasTursoDb: !!client,
-    storage: STORAGE_DIR,
-    activeLocksInMemory: currentLocks.size
-  });
-});
+// Initialize DB and Storage on boot up
+const db = getDbRepository();
+const storage = getStorageAdapter();
 
-// ImgBB / Local Image Upload Endpoint
-app.post('/api/upload', async (req, res) => {
+// ------------------ API Routes ------------------
+
+// 1. Health & Infrastructure Status Endpoint
+app.get('/api/health', rateLimitMiddleware('general'), async (req, res) => {
   try {
-    const { image, name } = req.body;
-    if (!image) {
-      return res.status(400).json({ error: 'Ukurasa unahitaji faili la picha.' });
-    }
+    const dbHealthy = await db.isHealthy();
+    const storageHealthy = await storage.isHealthy();
 
-    // Cleanup base64 prefixes if any
-    const base64Data = image.replace(/^data:image\/\w+;base64,/, "");
-    const finalName = name ? name.replace(/[^a-zA-Z0-9.-]/g, '_') : `product_${Date.now()}.jpg`;
-
-    const imgbbKey = process.env.IMGBB_API_KEY;
-    if (imgbbKey && imgbbKey.trim()) {
-      // 1. Upload to ImgBB securely server-side using URLSearchParams
-      const params = new URLSearchParams();
-      params.append('image', base64Data);
-      params.append('name', finalName.split('.')[0]);
-
-      const uploadUrl = `https://api.imgbb.com/1/upload?key=${imgbbKey.trim()}`;
-      const response = await fetch(uploadUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded'
-        },
-        body: params
-      });
-
-      if (!response.ok) {
-        const detail = await response.text();
-        throw new Error(`ImgBB API responded with ${response.status}: ${detail}`);
+    res.json({
+      status: 'ok',
+      timestamp: Date.now(),
+      securityGuardsActive: true,
+      infrastructure: {
+        database: dbHealthy ? 'healthy' : 'degraded',
+        storage: storageHealthy ? 'healthy' : 'degraded',
+        isLocalFallbackDb: db.constructor.name === 'FileSystemDbRepository',
+        isLocalFallbackStorage: storage.constructor.name === 'LocalDiskStorageAdapter'
       }
-
-      const result: any = await response.json();
-      if (result && result.success && result.data && result.data.url) {
-        return res.json({
-          success: true,
-          url: result.data.url,
-          thumbUrl: result.data.thumb?.url || result.data.url,
-          provider: 'imgbb'
-        });
-      } else {
-        throw new Error('Imeshindwa kupata URL toka ImgBB format.');
-      }
-    } else {
-      // 2. Local fallback storage when IMGBB_API_KEY setup is missing
-      const buffer = Buffer.from(base64Data, 'base64');
-      const uniqueFilename = `${Date.now()}_${finalName}`;
-      const localImagePath = path.join(IMAGES_DIR, uniqueFilename);
-      
-      fs.writeFileSync(localImagePath, buffer);
-      
-      return res.json({
-        success: true,
-        url: `/api/images/${uniqueFilename}`,
-        thumbUrl: `/api/images/${uniqueFilename}`,
-        provider: 'local_disk_fallback',
-        warning: 'Njia mbadala ya dharura inatumika (Local Storage). Kufikia mtandaoni kutoka vifaa vingine, weka secrets.'
-      });
-    }
+    });
   } catch (err: any) {
-    console.error('Image upload failed:', err);
-    res.status(500).json({ error: `Imeshindwa kukamilisha upakiaji: ${err?.message || err}` });
+    console.error('Health check failed:', err);
+    res.status(500).json({ status: 'unhealthy', error: err?.message || err });
   }
 });
 
-// Serve locally cached images
-app.get('/api/images/:filename', (req, res) => {
-  const filePath = path.join(IMAGES_DIR, req.params.filename);
+// 2. High-Performance Secure Image Upload Endpoint (Guarded by Upload Rate Limiters)
+app.post('/api/upload', 
+  rateLimitMiddleware('upload'), 
+  requestSizeVerification(15 * 1024 * 1024), 
+  async (req, res) => {
+    try {
+      const { image, name } = req.body;
+      if (!image) {
+        return res.status(400).json({ error: 'Ukurasa unahitaji faili la picha.' });
+      }
+
+      const originalFilename = name || `product_${Date.now()}.jpg`;
+      
+      // Delegation to storage adapter pattern - handles resizing, validation, retries and disk backups
+      const result = await storage.uploadImage(image, originalFilename);
+
+      if (result.success) {
+        return res.json(result);
+      } else {
+        return res.status(400).json({ error: result.error || 'Upakiaji wa picha ulishindwa.' });
+      }
+    } catch (err: any) {
+      console.error('Upload endpoint controller failure:', err);
+      res.status(500).json({ error: `Kosa la ndani wakati wa kupakia picha: ${err?.message || err}` });
+    }
+  }
+);
+
+// 3. Local Image Cache Server (Secure filename protection mapping)
+app.get('/api/images/:filename', rateLimitMiddleware('general'), (req, res) => {
+  const safeFilename = req.params.filename.replace(/[^a-zA-Z0-9_.-]/g, '');
+  const filePath = path.join('/tmp/mauzo_sync_store/images', safeFilename);
+
   if (fs.existsSync(filePath)) {
+    // Explicit content safety header matching for images
+    const ext = path.extname(safeFilename).toLowerCase();
+    const contentType = ext === '.png' ? 'image/png' : (ext === '.webp' ? 'image/webp' : 'image/jpeg');
+    res.setHeader('Content-Type', contentType);
     res.sendFile(filePath);
   } else {
     res.status(404).send('Picha haikupatikana.');
   }
 });
 
-// LOCKING ENDPOINTS (Distributed locks over Turso or memory fallback)
-app.post('/api/sync/:code/lock', async (req, res) => {
+// 4. Client Locking Endpoints (Guarded by Write Rate Limiters for lock flood protection)
+app.post('/api/sync/:code/lock', rateLimitMiddleware('write'), async (req, res) => {
   const { code } = req.params;
   const { clientId } = req.body;
-  const cleanCode = code.toUpperCase();
 
   if (!clientId) {
-    return res.status(400).json({ success: false, message: "Kifaa (clientId) hakikutambulika." });
+    return res.status(400).json({ success: false, message: 'Kifaa (clientId) hakikutambulika.' });
   }
 
-  const now = Date.now();
-  const client = await getActiveClient();
+  try {
+    const leaseMs = 20000; // Standardized lease window (20 seconds)
+    const result = await db.acquireLock(code, clientId, leaseMs);
 
-  if (client) {
-    try {
-      // Clean up expired locks from cloud SQLite to facilitate quick reuse
-      await client.execute({
-        sql: "DELETE FROM mauzo_locks WHERE expires_at < ?",
-        args: [now]
-      });
-
-      // Fetch lock owner
-      const result = await client.execute({
-        sql: "SELECT client_id, expires_at FROM mauzo_locks WHERE store_code = ?",
-        args: [cleanCode]
-      });
-
-      if (result.rows.length > 0) {
-        const owner = result.rows[0].client_id as string;
-        const expiresAt = result.rows[0].expires_at as number;
-
-        if (owner !== clientId && now < expiresAt) {
-          const remainingMs = Math.max(0, expiresAt - now);
-          return res.json({
-            success: false,
-            message: `Duka lipo busy sasa hivi. Kifaa kingine kinafanyia marekebisho. Subiri sekunde ${Math.ceil(remainingMs / 1000)}...`,
-            owner
-          });
-        }
-      }
-
-      // Claim / Renew Lock
-      await client.execute({
-        sql: `INSERT INTO mauzo_locks (store_code, client_id, expires_at) 
-              VALUES (?, ?, ?) 
-              ON CONFLICT(store_code) DO UPDATE SET 
-              client_id = excluded.client_id, 
-              expires_at = excluded.expires_at`,
-        args: [cleanCode, clientId, now + 20000] // 20 seconds lease
-      });
-
-      return res.json({ success: true, message: "Lock imepatikana/imeratibiwa mapato (Turso)." });
-    } catch (dbErr) {
-      console.error('Turso locking failure, falling back: ', dbErr);
-    }
-  }
-
-  // Memory fallback lock
-  const existingLock = currentLocks.get(cleanCode);
-  if (existingLock) {
-    if (existingLock.clientId !== clientId && now < existingLock.expiresAt) {
-      const remainingMs = Math.max(0, existingLock.expiresAt - now);
+    if (result.success) {
+      return res.json({ success: true, message: 'Lock imepatikana/imeratibiwa kikamilifu.' });
+    } else {
+      const remainingMs = Math.max(0, result.expiresAt - Date.now());
       return res.json({
         success: false,
-        message: `Duka lipo busy. Kifaa kingine kinafanyia marekebisho sasa. Subiri sekunde ${Math.ceil(remainingMs / 1000)}...`,
-        owner: existingLock.clientId
+        message: `Duka lipo busy sasa hivi. Kifaa kingine kinafanyia marekebisho. Subiri sekunde ${Math.ceil(remainingMs / 1000)}...`,
+        owner: result.owner
       });
     }
+  } catch (err: any) {
+    console.error(`Locking routine failure for store ${code}:`, err);
+    res.status(500).json({ success: false, message: 'Hitilafu wakati wa kutengeneza lock.' });
   }
-
-  currentLocks.set(cleanCode, {
-    clientId,
-    expiresAt: now + 20000
-  });
-
-  res.json({ success: true, message: "Lock imepatikana (Memory Fallback)." });
 });
 
-app.post('/api/sync/:code/unlock', async (req, res) => {
+app.post('/api/sync/:code/unlock', rateLimitMiddleware('write'), async (req, res) => {
   const { code } = req.params;
   const { clientId } = req.body;
-  const cleanCode = code.toUpperCase();
 
-  const client = await getActiveClient();
-  if (client) {
-    try {
-      await client.execute({
-        sql: "DELETE FROM mauzo_locks WHERE store_code = ? AND client_id = ?",
-        args: [cleanCode, clientId]
-      });
-      return res.json({ success: true, message: "Lock imeachiliwa kikamilifu (Turso)." });
-    } catch (dbErr) {
-      console.error('Turso unlock failure, falling back:', dbErr);
-    }
+  if (!clientId) {
+    return res.status(400).json({ success: false, message: 'Kifaa (clientId) hakikutambulika.' });
   }
 
-  const existingLock = currentLocks.get(cleanCode);
-  if (existingLock && existingLock.clientId === clientId) {
-    currentLocks.delete(cleanCode);
-    return res.json({ success: true, message: "Lock imeachiliwa kikamilifu (Memory)." });
+  try {
+    const released = await db.releaseLock(code, clientId);
+    return res.json({ success: released, message: released ? 'Lock imeachiliwa.' : 'Hukuwa mmiliki wa lock au lock ishafutika.' });
+  } catch (err: any) {
+    console.error(`Unlock routine failure for store ${code}:`, err);
+    res.status(500).json({ success: false, message: 'Hitilafu wakati wa kuachilia lock.' });
   }
-
-  res.json({ success: true, message: "Lock ilishaa-achiliwa tayari." });
 });
 
-// Sales Sync Endpoints
-app.get('/api/sync/:code/sales', async (req, res) => {
+// 5. Sales Sync Endpoints
+app.get('/api/sync/:code/sales', rateLimitMiddleware('general'), async (req, res) => {
   const { code } = req.params;
-  const cleanCode = code.replace(/[^a-zA-Z0-9-]/g, '').trim().toUpperCase();
+  try {
+    const data = await db.getSyncData(code);
+    if (data && data.salesData) {
+      return res.json(JSON.parse(data.salesData));
+    }
+    return res.json([]);
+  } catch (err: any) {
+    console.error(`Fetch sales failure for ${code}:`, err);
+    res.status(500).json({ error: 'Inashindwa kusoma data ya mauzo.' });
+  }
+});
 
-  const client = await getActiveClient();
-  if (client) {
+app.put('/api/sync/:code/sales', 
+  rateLimitMiddleware('write'), 
+  requestSizeVerification(15 * 1024 * 1024), 
+  async (req, res) => {
+    const { code } = req.params;
+    const salesPayload = req.body;
+
+    if (!Array.isArray(salesPayload)) {
+      return res.status(400).json({ error: 'Payload lazima iwe array ya JSON.' });
+    }
+
     try {
-      const result = await client.execute({
-        sql: "SELECT sales_data FROM mauzo_sync WHERE store_code = ?",
-        args: [cleanCode]
-      });
-      if (result.rows.length > 0) {
-        const val = result.rows[0].sales_data;
-        if (typeof val === 'string' && val.trim()) {
-          return res.json(JSON.parse(val));
-        }
+      const dataJson = JSON.stringify(salesPayload);
+      const success = await db.saveSyncData(code, 'sales_data', dataJson);
+      if (success) {
+        return res.json({ status: 'success', count: salesPayload.length });
       }
-      return res.json([]);
-    } catch (dbErr) {
-      console.error('Turso read sales error, falling back:', dbErr);
+      throw new Error('Database returned failure during upsert operation.');
+    } catch (err: any) {
+      console.error(`Save sales failure for ${code}:`, err);
+      res.status(500).json({ error: 'Inashindwa kuhifadhi data ya mauzo.' });
     }
   }
+);
 
-  const data = readSyncDataFromFile(cleanCode, 'sales');
-  res.json(data);
-});
-
-app.put('/api/sync/:code/sales', async (req, res) => {
+// 6. Products Sync Endpoints
+app.get('/api/sync/:code/products', rateLimitMiddleware('general'), async (req, res) => {
   const { code } = req.params;
-  const salesPayload = req.body;
-  if (!Array.isArray(salesPayload)) {
-    return res.status(400).json({ error: 'Payload must be a JSON array' });
-  }
-
-  const cleanCode = code.replace(/[^a-zA-Z0-9-]/g, '').trim().toUpperCase();
-  const salesJsonStr = JSON.stringify(salesPayload);
-
-  const client = await getActiveClient();
-  if (client) {
-    try {
-      await client.execute({
-        sql: `INSERT INTO mauzo_sync (store_code, sales_data, updated_at) 
-              VALUES (?, ?, ?) 
-              ON CONFLICT(store_code) DO UPDATE SET 
-              sales_data = excluded.sales_data, 
-              updated_at = excluded.updated_at`,
-        args: [cleanCode, salesJsonStr, Date.now()]
-      });
-      return res.json({ status: 'success', count: salesPayload.length, provider: 'turso' });
-    } catch (dbErr) {
-      console.error('Turso write sales error, falling back:', dbErr);
+  try {
+    const data = await db.getSyncData(code);
+    if (data && data.productsData) {
+      return res.json(JSON.parse(data.productsData));
     }
+    return res.json([]);
+  } catch (err: any) {
+    console.error(`Fetch products failure for ${code}:`, err);
+    res.status(500).json({ error: 'Inashindwa kusoma data ya bidhaa.' });
   }
-
-  writeSyncDataToFile(cleanCode, 'sales', salesPayload);
-  res.json({ status: 'success', count: salesPayload.length, provider: 'local_disk_fallback' });
 });
 
-// Products Sync Endpoints
-app.get('/api/sync/:code/products', async (req, res) => {
-  const { code } = req.params;
-  const cleanCode = code.replace(/[^a-zA-Z0-9-]/g, '').trim().toUpperCase();
+app.put('/api/sync/:code/products', 
+  rateLimitMiddleware('write'), 
+  requestSizeVerification(15 * 1024 * 1024), 
+  async (req, res) => {
+    const { code } = req.params;
+    const productsPayload = req.body;
 
-  const client = await getActiveClient();
-  if (client) {
+    if (!Array.isArray(productsPayload)) {
+      return res.status(400).json({ error: 'Payload lazima iwe array ya JSON.' });
+    }
+
     try {
-      const result = await client.execute({
-        sql: "SELECT products_data FROM mauzo_sync WHERE store_code = ?",
-        args: [cleanCode]
-      });
-      if (result.rows.length > 0) {
-        const val = result.rows[0].products_data;
-        if (typeof val === 'string' && val.trim()) {
-          return res.json(JSON.parse(val));
-        }
+      const dataJson = JSON.stringify(productsPayload);
+      const success = await db.saveSyncData(code, 'products_data', dataJson);
+      if (success) {
+        return res.json({ status: 'success', count: productsPayload.length });
       }
-      return res.json([]);
-    } catch (dbErr) {
-      console.error('Turso read products error, falling back:', dbErr);
+      throw new Error('Database returned failure during upsert operation.');
+    } catch (err: any) {
+      console.error(`Save products failure for ${code}:`, err);
+      res.status(500).json({ error: 'Inashindwa kuhifadhi data ya bidhaa.' });
     }
   }
+);
 
-  const data = readSyncDataFromFile(cleanCode, 'products');
-  res.json(data);
-});
-
-app.put('/api/sync/:code/products', async (req, res) => {
+// 7. Users Sync Endpoints
+app.get('/api/sync/:code/users', rateLimitMiddleware('general'), async (req, res) => {
   const { code } = req.params;
-  const productsPayload = req.body;
-  if (!Array.isArray(productsPayload)) {
-    return res.status(400).json({ error: 'Payload must be a JSON array' });
-  }
-
-  const cleanCode = code.replace(/[^a-zA-Z0-9-]/g, '').trim().toUpperCase();
-  const productsJsonStr = JSON.stringify(productsPayload);
-
-  const client = await getActiveClient();
-  if (client) {
-    try {
-      await client.execute({
-        sql: `INSERT INTO mauzo_sync (store_code, products_data, updated_at) 
-              VALUES (?, ?, ?) 
-              ON CONFLICT(store_code) DO UPDATE SET 
-              products_data = excluded.products_data, 
-              updated_at = excluded.updated_at`,
-        args: [cleanCode, productsJsonStr, Date.now()]
-      });
-      return res.json({ status: 'success', count: productsPayload.length, provider: 'turso' });
-    } catch (dbErr) {
-      console.error('Turso write products error, falling back:', dbErr);
+  try {
+    const data = await db.getSyncData(code);
+    if (data && data.usersData) {
+      return res.json(JSON.parse(data.usersData));
     }
+    return res.json([]);
+  } catch (err: any) {
+    console.error(`Fetch users failure for ${code}:`, err);
+    res.status(500).json({ error: 'Inashindwa kusoma data ya watumiaji.' });
   }
-
-  writeSyncDataToFile(cleanCode, 'products', productsPayload);
-  res.json({ status: 'success', count: productsPayload.length, provider: 'local_disk_fallback' });
 });
 
-// Users Sync Endpoints
-app.get('/api/sync/:code/users', async (req, res) => {
-  const { code } = req.params;
-  const cleanCode = code.replace(/[^a-zA-Z0-9-]/g, '').trim().toUpperCase();
+app.put('/api/sync/:code/users', 
+  rateLimitMiddleware('write'), 
+  requestSizeVerification(15 * 1024 * 1024), 
+  async (req, res) => {
+    const { code } = req.params;
+    const usersPayload = req.body;
 
-  const client = await getActiveClient();
-  if (client) {
+    if (!Array.isArray(usersPayload)) {
+      return res.status(400).json({ error: 'Payload lazima iwe array ya JSON.' });
+    }
+
     try {
-      const result = await client.execute({
-        sql: "SELECT users_data FROM mauzo_sync WHERE store_code = ?",
-        args: [cleanCode]
-      });
-      if (result.rows.length > 0) {
-        const val = result.rows[0].users_data;
-        if (typeof val === 'string' && val.trim()) {
-          return res.json(JSON.parse(val));
-        }
+      const dataJson = JSON.stringify(usersPayload);
+      const success = await db.saveSyncData(code, 'users_data', dataJson);
+      if (success) {
+        return res.json({ status: 'success', count: usersPayload.length });
       }
-      return res.json([]);
-    } catch (dbErr) {
-      console.error('Turso read users error, falling back:', dbErr);
+      throw new Error('Database returned failure during upsert operation.');
+    } catch (err: any) {
+      console.error(`Save users failure for ${code}:`, err);
+      res.status(500).json({ error: 'Inashindwa kuhifadhi data ya watumiaji.' });
     }
   }
+);
 
-  const data = readSyncDataFromFile(cleanCode, 'users');
-  res.json(data);
-});
-
-app.put('/api/sync/:code/users', async (req, res) => {
-  const { code } = req.params;
-  const usersPayload = req.body;
-  if (!Array.isArray(usersPayload)) {
-    return res.status(400).json({ error: 'Payload must be a JSON array' });
-  }
-
-  const cleanCode = code.replace(/[^a-zA-Z0-9-]/g, '').trim().toUpperCase();
-  const usersJsonStr = JSON.stringify(usersPayload);
-
-  const client = await getActiveClient();
-  if (client) {
-    try {
-      await client.execute({
-        sql: `INSERT INTO mauzo_sync (store_code, users_data, updated_at) 
-              VALUES (?, ?, ?) 
-              ON CONFLICT(store_code) DO UPDATE SET 
-              users_data = excluded.users_data, 
-              updated_at = excluded.updated_at`,
-        args: [cleanCode, usersJsonStr, Date.now()]
-      });
-      return res.json({ status: 'success', count: usersPayload.length, provider: 'turso' });
-    } catch (dbErr) {
-      console.error('Turso write users error, falling back:', dbErr);
-    }
-  }
-
-  writeSyncDataToFile(cleanCode, 'users', usersPayload);
-  res.json({ status: 'success', count: usersPayload.length, provider: 'local_disk_fallback' });
-});
-
-// Start routing configurations
+// ------------------ Vite & Static Asset Setup ------------------
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
@@ -506,13 +279,13 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server successfully started. Listening on http://localhost:${PORT}`);
+    console.log(`🚀 Production Ready App Server started. Listening on http://0.0.0.0:${PORT}`);
   });
 }
 
 if (!process.env.VERCEL) {
   startServer().catch((error) => {
-    console.error('Failed to start server:', error);
+    console.error('Server startup failed catastrophically:', error);
     process.exit(1);
   });
 }

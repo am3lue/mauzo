@@ -425,7 +425,7 @@ export default function App() {
   }, [workspaceCode]);
 
   return (
-    <div className="min-h-screen bg-[#e0e5ec] relative overflow-hidden py-8 px-4 flex flex-col font-sans select-none selection:bg-indigo-100 selection:text-indigo-900">
+    <div className="min-h-screen bg-[#e0e5ec] relative overflow-hidden py-4 sm:py-8 px-2 sm:px-4 flex flex-col font-sans select-none selection:bg-indigo-100 selection:text-indigo-900">
       
       {/* Playful Floating Ambient Orbs for Claymorph Depth */}
       <div className="absolute top-12 left-10 w-96 h-96 bg-indigo-200/40 rounded-full filter blur-[100px] pointer-events-none animate-pulse"></div>
@@ -433,67 +433,32 @@ export default function App() {
       <div className="absolute top-1/2 left-1/3 w-64 h-64 bg-rose-200/30 rounded-full filter blur-[90px] pointer-events-none"></div>
 
       {/* Main Container */}
-      <div className="max-w-7xl w-full mx-auto flex-1 flex flex-col gap-6 relative z-10">
+      <div className="max-w-7xl w-full mx-auto flex-1 flex flex-col relative z-10 clay-card overflow-hidden p-0 bg-[#f1f3f6] border border-white/60 shadow-xl rounded-[2.5rem]">
         
         {/* APP CONCAVE RAILHEADER */}
-        <header className="clay-card p-5 flex flex-col md:flex-row gap-5 items-center justify-between">
+        <header className="p-4 sm:p-5 flex flex-row items-center justify-between gap-3 sm:gap-5 border-b border-slate-200 bg-slate-100/50">
           
           {/* Logo & Brand Details */}
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-indigo-500 to-indigo-600 flex items-center justify-center text-white shadow-xl hover:scale-105 active:scale-95 transition-all">
-              <ShoppingBag size={24} className="stroke-[2]" />
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+            <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-2xl bg-gradient-to-tr from-indigo-500 to-indigo-600 flex items-center justify-center text-white shadow-xl hover:scale-105 active:scale-95 transition-all flex-shrink-0">
+              <ShoppingBag className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2]" />
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="font-sans font-black text-2xl text-slate-800 tracking-tight">Mauzo</h1>
-                <span className="text-[10px] font-mono bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-bold">SMART POS</span>
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 sm:gap-2">
+                <h1 className="font-sans font-black text-lg sm:text-2xl text-slate-800 tracking-tight">Mauzo</h1>
+                <span className="text-[9px] sm:text-[10px] font-mono bg-indigo-100 text-indigo-700 px-1.5 sm:px-2 py-0.5 rounded-full font-bold flex-shrink-0">SMART POS</span>
               </div>
-              <p className="text-[11px] text-slate-500 font-medium font-sans">
+              <p className="text-[10px] sm:text-[11px] text-slate-500 font-medium font-sans truncate leading-normal">
                 Mauzo Offline-First Retail Cashier & Debt Management
               </p>
             </div>
           </div>
 
           {/* Controller Switch & Extra Metrics */}
-          <div className="flex flex-wrap items-center gap-4">
+          <div className="flex items-center gap-2 sm:gap-4 flex-shrink-0 ml-auto justify-end">
             
-            {/* Sync Hub Trigger */}
-            <div className="flex items-center gap-2">
-              <button
-                id="btn-navbar-sync"
-                onClick={handleSyncDatabases}
-                disabled={isSyncing}
-                title="Sawazisha na vifaa vingine"
-                className={`py-2.5 px-4 rounded-full text-xs font-mono font-bold flex items-center gap-2 transition-all ${
-                  unsyncedCount > 0
-                    ? 'clay-btn-rose border border-rose-200 animate-bounce'
-                    : isSyncing 
-                    ? 'bg-amber-100 text-amber-700 animate-pulse'
-                    : 'clay-btn bg-slate-100 text-slate-500 hover:text-slate-800'
-                }`}
-              >
-                <CloudLightning size={14} className={isSyncing ? 'animate-spin text-amber-600' : 'text-indigo-500'} />
-                <span>
-                  {isSyncing ? 'Inasawazisha' : unsyncedCount > 0 ? `${unsyncedCount} sawazisha` : 'Cloud Sync'}
-                </span>
-              </button>
-
-              <button
-                id="btn-navbar-cloud-settings"
-                onClick={() => setShowCloudPanel(prev => !prev)}
-                className={`p-2.5 rounded-full transition-all flex items-center justify-center ${
-                  showCloudPanel 
-                    ? 'bg-indigo-600 text-white shadow-inner scale-105' 
-                    : 'clay-btn bg-white text-slate-500 hover:text-slate-800'
-                }`}
-                title="Mipangilio ya Wingu (Cloud Sync Settings)"
-              >
-                <Cloud size={14} className="stroke-[2.5]" />
-              </button>
-            </div>
-
             {/* Seller Switch Account */}
-            {currentRole === 'seller' && (
+            {currentRole === 'seller' && authenticatedSellerId !== activeSeller.id && (
               <div className="flex items-center gap-1.5 p-1 bg-slate-200 rounded-2xl shadow-inner border border-slate-300/40">
                 {onlySellers.map((sel, idx) => {
                   const isAuthedObj = authenticatedSellerId === sel.id;
@@ -522,37 +487,7 @@ export default function App() {
               </div>
             )}
 
-            {/* Role switch pill - Heavy 3D tactile trigger */}
-            <div className="flex items-center p-1 bg-slate-300/60 rounded-3xl shadow-inner border border-slate-400/20">
-              <button
-                id="btn-set-seller"
-                onClick={() => handleRoleChange('seller')}
-                className={`px-5 py-2.5 text-sm font-bold rounded-2xl transition-all flex items-center gap-2 ${
-                  currentRole === 'seller'
-                    ? 'clay-btn bg-indigo-600 text-white shadow-md'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <span>Muuzaji (POS)</span>
-                {authenticatedSellerId === activeSeller.id && (
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                )}
-              </button>
-              <button
-                id="btn-set-boss"
-                onClick={() => handleRoleChange('boss')}
-                className={`px-5 py-2.5 text-sm font-bold rounded-2xl transition-all flex items-center gap-2 ${
-                  currentRole === 'boss'
-                    ? 'clay-btn bg-indigo-600 text-white shadow-md'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <span>Boss (Reports)</span>
-                {isBossAuthenticated && (
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                )}
-              </button>
-            </div>
+
 
             {/* Logout/Lock session button if currently authenticated */}
             {((currentRole === 'seller' && authenticatedSellerId === activeSeller.id) || 
@@ -566,7 +501,7 @@ export default function App() {
                     setIsBossAuthenticated(false);
                   }
                 }}
-                className="py-2.5 px-4 rounded-full text-xs font-bold clay-btn bg-white text-rose-600 border border-slate-300/40 hover:bg-rose-50 flex items-center gap-2 transition-all active:scale-95 shadow-md flex-shrink-0"
+                className="py-2.5 px-3.5 sm:px-4 rounded-full text-xs font-bold clay-btn bg-white text-rose-600 border border-slate-300/40 hover:bg-rose-50 flex items-center gap-1.5 sm:gap-2 transition-all active:scale-95 shadow-md flex-shrink-0"
                 title="Funga Kipindi / Logout"
               >
                 <LogOut size={14} />
@@ -578,125 +513,8 @@ export default function App() {
 
         </header>
 
-        {/* CLOUD DATABASE SYNC SETTINGS & CONTROLS (BENTO-STYLE COLLAPSIBLE DRAW PANEL) */}
-        {showCloudPanel && (
-          <div id="cloud-sync-settings" className="clay-card p-5 bg-gradient-to-r from-slate-50 to-indigo-50/40 border border-indigo-100 flex flex-col gap-4 animate-slideDown">
-            <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-indigo-100 text-indigo-600 flex items-center justify-center">
-                  <Cloud size={20} className="stroke-[2.5]" />
-                </div>
-                <div>
-                  <h3 className="font-sans font-bold text-sm text-slate-800 flex items-center gap-2">
-                    <span>Usawazishaji wa Wingu</span>
-                    <span className="text-[10px] font-mono bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-bold">Cloud Sync</span>
-                  </h3>
-                  <p className="text-[11px] text-slate-500 font-medium font-sans">
-                    Sajili na usawazishe data za Mauzo, Stoki na Madeni ili kutumia duka moja kwenye simu na kompyuta tofauti bila kupoteza kumbukumbu.
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <span className={`text-[10px] font-mono font-bold px-2.5 py-1 rounded-full uppercase tracking-wider ${
-                  isSyncing ? 'bg-amber-100 text-amber-700 animate-pulse border border-amber-200' : 'bg-emerald-100 text-emerald-700 border border-emerald-200'
-                }`}>
-                  {isSyncing ? 'Inasawazisha...' : 'Wingu Lipo Tayari'}
-                </span>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-5 items-center pt-3 border-t border-slate-200/60 text-xs">
-              {/* Input for Workspace Code */}
-              <div className="flex flex-col gap-1.5">
-                <label className="text-[10px] text-slate-500 font-bold uppercase tracking-wider font-sans">Code ya Cloud ya Duka hili:</label>
-                <div className="flex gap-2">
-                  <input
-                    id="workspace-code-field"
-                    type="text"
-                    placeholder="MZO-1234"
-                    value={workspaceCode}
-                    onChange={(e) => {
-                      const cleaned = e.target.value.toUpperCase().replace(/[^a-zA-Z0-9-]/g, '');
-                      setWorkspaceCode(cleaned);
-                      localStorage.setItem('mauzo_workspace_code', cleaned);
-                    }}
-                    className="clay-input px-3 py-2 w-full text-center font-bold font-mono tracking-widest text-indigo-700 text-sm bg-white"
-                  />
-                </div>
-                <span className="text-[9px] text-slate-400 font-sans">Weka herufi na namba sawa kwenye vifaa vyote ili viunganike.</span>
-              </div>
-
-              {/* Status details */}
-              <div className="flex flex-col gap-1.5 p-3 rounded-2xl bg-white border border-slate-200/60 font-sans">
-                <div className="flex justify-between items-center text-slate-500">
-                  <span className="font-medium text-[10px] uppercase tracking-wider">Haijasawazishwa sasa:</span>
-                  <strong className={`font-mono font-bold ${unsyncedCount > 0 ? 'text-rose-600 animate-pulse' : 'text-slate-700'}`}>
-                    {unsyncedCount} mauzo
-                  </strong>
-                </div>
-                <div className="flex justify-between items-center text-slate-500 border-t border-slate-100 pt-1">
-                  <span className="font-medium text-[10px] uppercase tracking-wider">Ushirikiano wa Mwisho:</span>
-                  <strong className="text-slate-600 font-semibold font-mono truncate max-w-[140px]" title={lastSyncedTime || ''}>
-                    {lastSyncedTime || 'Bado'}
-                  </strong>
-                </div>
-              </div>
-
-              {/* Action Sync Button */}
-              <div className="flex flex-col gap-2">
-                <button
-                  id="btn-trigger-sync"
-                  onClick={handleSyncDatabases}
-                  disabled={isSyncing}
-                  className={`py-3 px-4 rounded-2xl text-xs font-bold font-sans flex items-center justify-center gap-2 transition-all ${
-                    isSyncing 
-                      ? 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-inner' 
-                      : 'clay-btn-indigo text-indigo-700 hover:scale-[1.01] cursor-pointer shadow-md'
-                  }`}
-                >
-                  <RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''} />
-                  <span>Sasa Sawazisha (Merge Sync)</span>
-                </button>
-              </div>
-            </div>
-
-            {activeSyncError && (
-              <div className="p-3 bg-rose-50 border border-rose-200/80 rounded-2xl flex items-center gap-2 text-xs text-rose-700 font-sans animate-fadeIn">
-                <AlertCircle size={14} className="text-rose-500 flex-shrink-0" />
-                <p className="margin-0.5">
-                  <strong>Hitilafu ya Usawazishaji:</strong> {activeSyncError} (Hakikisha duka hili lina intaneti au Code ipo sahihi).
-                </p>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* CLOUD DATABASE SYNC SUCCESS MODAL / BANNER */}
-        {showSyncSuccessAlert && (
-          <div className="clay-card-secondary p-4 bg-emerald-50 border border-emerald-200/90 shadow-md text-emerald-800 flex items-center justify-between gap-4 animate-slideDown">
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-full bg-emerald-500 flex items-center justify-center text-white shadow">
-                <CheckCircle size={16} />
-              </div>
-              <div className="text-xs">
-                <h4 className="font-bold">Database Isesawazishwa na Wingi (Cloud Storage)!</h4>
-                <p className="text-emerald-600 font-medium font-mono">
-                  Data za mauzo na stoki zimesawazishwa kikamilifu na wingu chini ya Code: {workspaceCode}.
-                </p>
-              </div>
-            </div>
-            <button 
-              onClick={() => setShowSyncSuccessAlert(false)}
-              className="text-emerald-500 hover:text-emerald-700 text-xs font-bold"
-            >
-              OK
-            </button>
-          </div>
-        )}
-
         {/* WORKSPACE VIEW ROUTING */}
-        <main className="flex-1 flex flex-col">
+        <main className="flex-1 flex flex-col p-4 sm:p-6 overflow-x-hidden">
           {currentRole === 'seller' ? (
             authenticatedSellerId === activeSeller.id ? (
               <SellerView 
@@ -712,10 +530,7 @@ export default function App() {
                 activeSeller={activeSeller}
                 sellers={sellers}
                 onLoginSuccess={(userId) => setAuthenticatedSellerId(userId)}
-                onCancel={() => {
-                  // Fallback safely to previous or opposite role
-                  setCurrentRole('boss');
-                }}
+                onChangeRole={(newRole) => setCurrentRole(newRole)}
                 currentSellerIndex={currentSellerIndex}
                 onSelectSeller={setCurrentSellerIndex}
               />
@@ -740,10 +555,7 @@ export default function App() {
                 activeSeller={activeSeller}
                 sellers={sellers}
                 onLoginSuccess={() => setIsBossAuthenticated(true)}
-                onCancel={() => {
-                  // Fallback safely to previous or opposite role
-                  setCurrentRole('seller');
-                }}
+                onChangeRole={(newRole) => setCurrentRole(newRole)}
                 currentSellerIndex={currentSellerIndex}
                 onSelectSeller={setCurrentSellerIndex}
               />

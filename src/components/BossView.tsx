@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   TrendingUp, 
   Coins, 
@@ -17,7 +17,8 @@ import {
   CheckCircle,
   Package,
   Clock,
-  Briefcase
+  Briefcase,
+  Menu
 } from 'lucide-react';
 import { Product, Sale, DebtPayment, User } from '../types';
 import ProductIcon from './ProductIcon';
@@ -49,6 +50,40 @@ export default function BossView({
 }: BossViewProps) {
   // Tabs within Boss panel
   const [activeTab, setActiveTab] = useState<'dashboard' | 'products' | 'debts' | 'users'>('dashboard');
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+
+  // Dynamic Product Categories list with persistence
+  const [categories, setCategories] = useState<string[]>(() => {
+    const saved = localStorage.getItem('mauzo_categories');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      } catch (e) {}
+    }
+    return ['Chakula (Food)', 'Vinywaji (Beverages)', 'Groceries', 'Vifaa (Household)'];
+  });
+
+  const [showCategoryManager, setShowCategoryManager] = useState(false);
+  const [newCategoryInput, setNewCategoryInput] = useState('');
+
+  // Suggested icons by category keywords helper
+  const getSuggestedIconsForCategory = (categoryName: string) => {
+    const cat = categoryName.toLowerCase();
+    if (cat.includes('vinywaji') || cat.includes('beverage') || cat.includes('soda') || cat.includes('juice') || cat.includes('drink') || cat.includes('cola') || cat.includes('maji')) {
+      return ['cola', 'water', 'tea'];
+    }
+    if (cat.includes('chakula') || cat.includes('food') || cat.includes('cereal') || cat.includes('grain') || cat.includes('unga') || cat.includes('rice') || cat.includes('sugar') || cat.includes('mchele') || cat.includes('sukari')) {
+      return ['maize', 'rice', 'sugar', 'margarine'];
+    }
+    if (cat.includes('groceries')) {
+      return ['rice', 'sugar', 'margarine', 'water', 'soap'];
+    }
+    if (cat.includes('vifaa') || cat.includes('household') || cat.includes('soap') || cat.includes('sabuni') || cat.includes('usafi')) {
+      return ['soap', 'water'];
+    }
+    return ['maize', 'cola', 'tea', 'margarine', 'soap', 'rice', 'water', 'sugar'];
+  };
 
   // User Management states
   const [userName, setUserName] = useState('');
@@ -67,6 +102,39 @@ export default function BossView({
   const [newProdPrice, setNewProdPrice] = useState('');
   const [newProdStock, setNewProdStock] = useState('');
   const [newProdImage, setNewProdImage] = useState('maize');
+
+  // Auto-align default product category on mount/update
+  useEffect(() => {
+    if (categories.length > 0 && !categories.includes(newProdCategory)) {
+      setNewProdCategory(categories[0]);
+    }
+  }, [categories]);
+
+  const handleAddCategory = (e: React.FormEvent) => {
+    e.preventDefault();
+    const cat = newCategoryInput.trim();
+    if (!cat) return;
+    if (categories.includes(cat)) {
+      alert('Kundi hili tayari lipo!');
+      return;
+    }
+    const updated = [...categories, cat];
+    setCategories(updated);
+    localStorage.setItem('mauzo_categories', JSON.stringify(updated));
+    setNewCategoryInput('');
+  };
+
+  const handleRemoveCategory = (catToRemove: string) => {
+    if (categories.length <= 1) {
+      alert('Lazima kuwe na kundi angalau moja dukani!');
+      return;
+    }
+    if (confirm(`Je, una uhakika unataka kufuta kundi "${catToRemove}"?`)) {
+      const updated = categories.filter(c => c !== catToRemove);
+      setCategories(updated);
+      localStorage.setItem('mauzo_categories', JSON.stringify(updated));
+    }
+  };
   
   // Custom uploaded image states
   const [imageType, setImageType] = useState<'preset' | 'upload'>('preset');
@@ -388,15 +456,15 @@ export default function BossView({
   return (
     <div className="flex flex-col gap-6">
       
-      {/* Boss control navigation bar */}
-      <div className="clay-card p-4 flex flex-wrap gap-3 items-center justify-between bg-slate-100">
-        <div className="flex items-center gap-1">
+      {/* Boss control navigation bar - DESKTOP */}
+      <div className="hidden lg:flex clay-card p-4 items-center justify-between bg-slate-100">
+        <div className="flex items-center gap-1.5">
           <button
             id="tab-dashboard"
             onClick={() => setActiveTab('dashboard')}
             className={`px-5 py-2.5 rounded-full text-sm font-semibold transition-all ${
               activeTab === 'dashboard'
-                ? 'clay-btn-indigo text-indigo-700 bg-indigo-50'
+                ? 'clay-btn-indigo text-indigo-700 bg-indigo-50 font-bold'
                 : 'clay-btn text-slate-600 hover:text-slate-900 bg-white'
             }`}
           >
@@ -407,7 +475,7 @@ export default function BossView({
             onClick={() => setActiveTab('products')}
             className={`px-5 py-2.5 rounded-full text-sm font-semibold transition-all ${
               activeTab === 'products'
-                ? 'clay-btn-indigo text-indigo-700 bg-indigo-50'
+                ? 'clay-btn-indigo text-indigo-700 bg-indigo-50 font-bold'
                 : 'clay-btn text-slate-600 hover:text-slate-900 bg-white'
             }`}
           >
@@ -418,7 +486,7 @@ export default function BossView({
             onClick={() => setActiveTab('debts')}
             className={`px-5 py-2.5 rounded-full text-sm font-semibold transition-all ${
               activeTab === 'debts'
-                ? 'clay-btn-indigo text-indigo-700 bg-indigo-50'
+                ? 'clay-btn-indigo text-indigo-700 bg-indigo-50 font-bold'
                 : 'clay-btn text-slate-600 hover:text-slate-900 bg-white'
             }`}
           >
@@ -434,7 +502,7 @@ export default function BossView({
             onClick={() => setActiveTab('users')}
             className={`px-5 py-2.5 rounded-full text-sm font-semibold transition-all flex items-center gap-1.5 ${
               activeTab === 'users'
-                ? 'clay-btn-indigo text-indigo-700 bg-indigo-50'
+                ? 'clay-btn-indigo text-indigo-700 bg-indigo-50 font-bold'
                 : 'clay-btn text-slate-600 hover:text-slate-900 bg-white'
             }`}
           >
@@ -451,7 +519,7 @@ export default function BossView({
             className={`px-4 py-2.5 rounded-2xl text-xs font-bold font-mono transition-all flex items-center gap-2 ${
               isSyncing 
                 ? 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-inner' 
-                : 'clay-btn bg-white text-slate-700'
+                : 'clay-btn bg-white text-slate-700 hover:scale-105 active:scale-95'
             }`}
           >
             <RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''} />
@@ -467,6 +535,143 @@ export default function BossView({
             Ripoti (Excel CSV)
           </button>
         </div>
+      </div>
+
+      {/* Boss control navigation bar - MOBILE & TABLET (Sandwich Menu) */}
+      <div className="flex lg:hidden flex-col gap-2 sticky top-2 z-[100] transition-all duration-300">
+        <div className="clay-card p-4 flex items-center justify-between bg-slate-100/90 backdrop-blur-md shadow-md border border-white/30">
+          <div className="flex flex-col">
+            <span className="text-[10px] text-indigo-600 font-extrabold uppercase tracking-widest">Usimamizi (Boss Panel)</span>
+            <span className="text-base font-black text-slate-800 flex items-center gap-2 capitalize">
+              {activeTab === 'dashboard' && 'Dashboard Kuu'}
+              {activeTab === 'products' && 'Bidhaa (Inventory)'}
+              {activeTab === 'debts' && `Wadaiwa (Debt Tracker)`}
+              {activeTab === 'users' && 'Watumiaji & Roles'}
+              
+              {activeTab === 'debts' && outstandingDebts.length > 0 && (
+                <span className="px-2 py-0.5 text-[10px] bg-red-100 text-red-600 border border-red-200 rounded-full font-mono font-bold animate-pulse">
+                  {outstandingDebts.length}
+                </span>
+              )}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {/* Quick sync shortcut button next to sandwich to make it even more convenient */}
+            <button
+              onClick={onSyncSales}
+              disabled={isSyncing}
+              className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${
+                isSyncing 
+                  ? 'bg-slate-200 text-slate-400' 
+                  : 'bg-white text-slate-700 shadow-sm border border-slate-200 active:scale-95'
+              }`}
+              title="Sawazisha"
+            >
+              <RefreshCw size={15} className={isSyncing ? 'animate-spin' : ''} />
+            </button>
+
+            {/* Sandwich Toggle Button */}
+            <button
+              onClick={() => setIsMenuOpen(!isMenuOpen)}
+              className="w-11 h-11 rounded-xl bg-indigo-600 text-white shadow-lg flex items-center justify-center hover:bg-indigo-700 active:scale-95 transition-all"
+              aria-label="Fungua Menu"
+            >
+              {isMenuOpen ? <X size={20} /> : <Menu size={20} />}
+            </button>
+          </div>
+        </div>
+
+        {/* Dropdown Menu List with clear beautiful claymorphic design */}
+        {isMenuOpen && (
+          <div className="absolute top-[72px] right-0 left-0 clay-card p-4 bg-white/95 backdrop-blur-lg shadow-2xl border border-indigo-100 flex flex-col gap-3.5 z-40 animate-in fade-in slide-in-from-top-4 duration-200">
+            <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-1.5">Menyu ya Kuratibu (Navigation)</span>
+            
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <button
+                onClick={() => {
+                  setActiveTab('dashboard');
+                  setIsMenuOpen(false);
+                }}
+                className={`flex items-center gap-3 p-3 rounded-xl text-sm font-bold transition-all ${
+                  activeTab === 'dashboard'
+                    ? 'bg-indigo-50 text-indigo-700 border border-indigo-200 shadow-inner'
+                    : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                <TrendingUp size={16} />
+                <span>Dashboard Kuu</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setActiveTab('products');
+                  setIsMenuOpen(false);
+                }}
+                className={`flex items-center gap-3 p-3 rounded-xl text-sm font-bold transition-all ${
+                  activeTab === 'products'
+                    ? 'bg-indigo-50 text-indigo-700 border border-indigo-200 shadow-inner'
+                    : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                <Package size={16} />
+                <span>Bidhaa (Inventory)</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setActiveTab('debts');
+                  setIsMenuOpen(false);
+                }}
+                className={`flex items-center gap-3 p-3 rounded-xl text-sm font-bold transition-all justify-between ${
+                  activeTab === 'debts'
+                    ? 'bg-indigo-50 text-indigo-700 border border-indigo-200 shadow-inner'
+                    : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <Coins size={16} />
+                  <span>Wadaiwa (Debt Tracker)</span>
+                </div>
+                {outstandingDebts.length > 0 && (
+                  <span className="px-2 py-0.5 text-xs bg-red-100 text-red-600 border border-red-200 rounded-full font-mono font-black">
+                    {outstandingDebts.length}
+                  </span>
+                )}
+              </button>
+
+              <button
+                onClick={() => {
+                  setActiveTab('users');
+                  setIsMenuOpen(false);
+                }}
+                className={`flex items-center gap-3 p-3 rounded-xl text-sm font-bold transition-all ${
+                  activeTab === 'users'
+                    ? 'bg-indigo-50 text-indigo-700 border border-indigo-200 shadow-inner'
+                    : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                <Users size={16} />
+                <span>Watumiaji & Roles</span>
+              </button>
+            </div>
+
+            <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest border-b border-slate-100 pt-1 pb-1.5">Vitendo vya Haraka (Quick Actions)</span>
+            
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={() => {
+                  handleExportCSV();
+                  setIsMenuOpen(false);
+                }}
+                className="flex items-center justify-center gap-2.5 p-3 rounded-xl text-xs font-bold font-mono bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-100 w-full"
+              >
+                <FileSpreadsheet size={14} />
+                <span>Hamisha Ripoti (Excel CSV)</span>
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* DASHBOARD TAB CONTENT */}
@@ -674,7 +879,85 @@ export default function BossView({
                 Futa vichujio
               </button>
             )}
+
+            {/* Toggle category manager */}
+            <button
+              type="button"
+              onClick={() => setShowCategoryManager(prev => !prev)}
+              className={`px-4 py-2.5 rounded-2xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                showCategoryManager 
+                  ? 'bg-indigo-600 text-white shadow-inner scale-105' 
+                  : 'clay-btn bg-white text-slate-600 hover:text-slate-800'
+              }`}
+            >
+              <Tags size={14} />
+              <span>{showCategoryManager ? 'Funga Vikundi' : 'Usimamizi wa Vikundi'}</span>
+            </button>
           </div>
+
+          {/* DYNAMIC CATEGORIES CONFIGURATOR PANEL */}
+          {showCategoryManager && (
+            <div className="clay-card p-5 bg-gradient-to-r from-slate-50 to-indigo-50/20 border border-indigo-100 flex flex-col gap-4 animate-slideDown">
+              <div className="flex items-center justify-between border-b border-slate-200/60 pb-2">
+                <div>
+                  <h4 className="font-sans font-bold text-sm text-slate-800 flex items-center gap-2">
+                    <Tags size={16} className="text-indigo-600" />
+                    <span>Usimamizi wa Vikundi vya Bidhaa (Categories)</span>
+                  </h4>
+                  <p className="text-[11px] text-slate-500 font-medium mt-0.5">
+                    Unaweza kuongeza vikundi vipya au kufuta vile visivyohitajika kwa uandishi rahisi wa stoki yako.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-start pt-2">
+                {/* Current Categories List */}
+                <div className="md:col-span-2 flex flex-col gap-2">
+                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Vikundi vya sasa hivi ({categories.length}):</span>
+                  <div className="flex flex-wrap gap-2">
+                    {categories.map((cat) => (
+                      <div 
+                        key={cat} 
+                        className="pl-3.5 pr-2 py-1.5 rounded-2xl bg-white border border-slate-200 shadow-sm flex items-center gap-2 text-xs font-semibold text-slate-700 hover:border-slate-300 transition-all hover:scale-[1.02]"
+                      >
+                        <span>{cat}</span>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveCategory(cat)}
+                          className="w-5 h-5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-500 hover:text-rose-600 flex items-center justify-center transition-colors"
+                          title={`Futa kundi ${cat}`}
+                        >
+                          <Trash2 size={11} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Add New Category Form */}
+                <form onSubmit={handleAddCategory} className="flex flex-col gap-2.5 p-4 rounded-2xl bg-white border border-slate-200/60">
+                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Ongeza Kundi jipya:</span>
+                  <div className="flex flex-col gap-2">
+                    <input
+                      type="text"
+                      required
+                      placeholder="Mf. Vipodozi, Vinywaji, n.k."
+                      value={newCategoryInput}
+                      onChange={(e) => setNewCategoryInput(e.target.value)}
+                      className="clay-input px-3 py-2 w-full text-xs font-sans placeholder:text-slate-400 bg-slate-50/50"
+                    />
+                    <button
+                      type="submit"
+                      className="py-2 px-3 rounded-xl text-xs font-bold font-sans clay-btn-indigo flex items-center justify-center gap-1.5 w-full hover:scale-105 active:scale-95 transition-all"
+                    >
+                      <Plus size={13} />
+                      <span>Ongeza Kundi</span>
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
 
           <div className="clay-card overflow-hidden">
             <div className="overflow-x-auto">
@@ -1250,8 +1533,8 @@ export default function BossView({
 
       {/* CHOOSE MODAL FOR CREATING PRODUCT */}
       {showAddProductModal && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[999] flex items-center justify-center p-4">
-          <div className="clay-card max-w-md w-full bg-slate-50 p-6 flex flex-col gap-4 animate-scaleUp">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[999] flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="clay-card max-w-md w-full bg-slate-50 p-4 sm:p-6 flex flex-col gap-3 sm:gap-4 animate-scaleUp my-auto max-h-[95vh] overflow-y-auto no-scrollbar">
             <div className="flex justify-between items-center border-b border-slate-200 pb-3">
               <h3 className="font-sans font-bold text-slate-800 text-lg">Ongeza Bidhaa Mpya</h3>
               <button 
@@ -1301,7 +1584,7 @@ export default function BossView({
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="text-xs text-slate-500 font-semibold mb-1 block">Kundi lake (Category)</label>
                   <select
@@ -1310,10 +1593,9 @@ export default function BossView({
                     onChange={(e) => setNewProdCategory(e.target.value)}
                     className="clay-input px-3.5 py-2.5 w-full text-xs"
                   >
-                    <option value="Chakula (Food)">Chakula (Food)</option>
-                    <option value="Vinywaji (Beverages)">Vinywaji (Beverages)</option>
-                    <option value="Groceries">Groceries</option>
-                    <option value="Vifaa (Household)">Vifaa (Household)</option>
+                    {categories.map(cat => (
+                      <option key={cat} value={cat}>{cat}</option>
+                    ))}
                   </select>
                 </div>
 
@@ -1345,21 +1627,47 @@ export default function BossView({
                   </div>
 
                   {imageType === 'preset' ? (
-                    <select
-                      id="new-product-img"
-                      value={newProdImage}
-                      onChange={(e) => setNewProdImage(e.target.value)}
-                      className="clay-input px-3 py-2 w-full text-xs font-medium"
-                    >
-                      <option value="maize">Ngano / Sembe</option>
-                      <option value="cola">Kinywaji cha Soda</option>
-                      <option value="tea">Kahawa / Chai</option>
-                      <option value="margarine">Margarine</option>
-                      <option value="soap">Sabuni</option>
-                      <option value="rice">Mchele / Nafaka</option>
-                      <option value="water">Maji ya chupa</option>
-                      <option value="sugar">Sukari</option>
-                    </select>
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap gap-2 p-2 bg-slate-200/30 rounded-2xl border border-slate-300/20 max-h-[110px] overflow-y-auto">
+                        {['maize', 'cola', 'tea', 'margarine', 'soap', 'rice', 'water', 'sugar'].map(iconKey => {
+                          const suggested = getSuggestedIconsForCategory(newProdCategory || '');
+                          const isSuggested = suggested.includes(iconKey);
+                          const isSelected = newProdImage === iconKey;
+                          return (
+                            <button
+                              key={iconKey}
+                              type="button"
+                              onClick={() => setNewProdImage(iconKey)}
+                              className={`relative p-0.5 rounded-xl transition-all duration-150 hover:scale-110 flex-shrink-0 ${
+                                isSelected 
+                                  ? 'ring-4 ring-indigo-500 scale-105 shadow-md z-10' 
+                                  : isSuggested 
+                                    ? 'opacity-100 bg-indigo-50 border border-indigo-200/40' 
+                                    : 'opacity-50 hover:opacity-100'
+                              }`}
+                              title={
+                                iconKey === 'maize' ? 'Unga/Nafaka' :
+                                iconKey === 'cola' ? 'Soda/Vinywaji' :
+                                iconKey === 'tea' ? 'Kahawa/Chai' :
+                                iconKey === 'margarine' ? 'Mafuta/Margarine' :
+                                iconKey === 'soap' ? 'Sabuni/Usafi' :
+                                iconKey === 'rice' ? 'Mchele/Nafaka' :
+                                iconKey === 'water' ? 'Maji ya chupa' :
+                                iconKey === 'sugar' ? 'Sukari' : iconKey
+                              }
+                            >
+                              <div className="w-8 h-8">
+                                <ProductIcon type={iconKey} size={14} fullSize />
+                              </div>
+                              {isSuggested && !isSelected && (
+                                <span className="absolute -top-1 -right-1 w-2 h-2 bg-indigo-600 rounded-full border border-white" />
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <p className="text-[9px] text-slate-400 font-medium">Alama zenye kitone cha bluu zinapendekezwa kulingana na Kundi lililochaguliwa.</p>
+                    </div>
                   ) : (
                     <div className="flex flex-col gap-1.5">
                       <div className="flex items-center gap-2">

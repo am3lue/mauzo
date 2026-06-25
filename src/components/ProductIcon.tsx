@@ -15,12 +15,16 @@ interface ProductIconProps {
   type: string;
   className?: string;
   size?: number;
+  fullSize?: boolean;
 }
 
-export default function ProductIcon({ type, className = "w-6 h-6", size = 24 }: ProductIconProps) {
+export default function ProductIcon({ type, className = "w-6 h-6", size = 24, fullSize = false }: ProductIconProps) {
   if (type && (type.startsWith('http') || type.startsWith('data:') || type.startsWith('/api/'))) {
+    const containerClasses = fullSize 
+      ? "w-full h-full rounded-2xl overflow-hidden flex items-center justify-center bg-slate-100 shadow-inner border border-slate-200/80 flex-shrink-0"
+      : "w-12 h-12 rounded-2xl overflow-hidden flex items-center justify-center bg-slate-100 shadow-inner border border-slate-200/80 flex-shrink-0";
     return (
-      <div className="w-12 h-12 rounded-2xl overflow-hidden flex items-center justify-center bg-slate-100 shadow-inner border border-slate-200/80 flex-shrink-0">
+      <div className={containerClasses}>
         <img 
           src={type} 
           alt="bidhaa icon" 
@@ -35,58 +39,62 @@ export default function ProductIcon({ type, className = "w-6 h-6", size = 24 }: 
     );
   }
 
+  const wrapperClass = fullSize 
+    ? "w-full h-full rounded-2xl flex items-center justify-center shadow-inner" 
+    : "p-3 rounded-2xl flex items-center justify-center shadow-inner";
+
   switch (type) {
     case 'cola':
       return (
-        <div className="p-3 bg-red-100 rounded-2xl flex items-center justify-center text-red-600 shadow-inner">
+        <div className={`${wrapperClass} ${fullSize ? 'bg-red-50 text-red-600' : 'bg-red-100 text-red-600'}`}>
           <CupSoda className={className} size={size} />
         </div>
       );
     case 'maize':
       return (
-        <div className="p-3 bg-amber-100 rounded-2xl flex items-center justify-center text-amber-700 shadow-inner">
+        <div className={`${wrapperClass} ${fullSize ? 'bg-amber-50 text-amber-700' : 'bg-amber-100 text-amber-700'}`}>
           <Wheat className={className} size={size} />
         </div>
       );
     case 'tea':
       return (
-        <div className="p-3 bg-emerald-100 rounded-2xl flex items-center justify-center text-emerald-700 shadow-inner">
+        <div className={`${wrapperClass} ${fullSize ? 'bg-emerald-50 text-emerald-700' : 'bg-emerald-100 text-emerald-700'}`}>
           <Coffee className={className} size={size} />
         </div>
       );
     case 'margarine':
       return (
-        <div className="p-3 bg-yellow-100 rounded-2xl flex items-center justify-center text-yellow-600 shadow-inner">
+        <div className={`${wrapperClass} ${fullSize ? 'bg-yellow-50 text-yellow-600' : 'bg-yellow-100 text-yellow-600'}`}>
           <UtensilsCrossed className={className} size={size} />
         </div>
       );
     case 'soap':
       return (
-        <div className="p-3 bg-blue-100 rounded-2xl flex items-center justify-center text-blue-600 shadow-inner">
+        <div className={`${wrapperClass} ${fullSize ? 'bg-blue-50 text-blue-600' : 'bg-blue-100 text-blue-600'}`}>
           <Sparkles className={className} size={size} />
         </div>
       );
     case 'rice':
       return (
-        <div className="p-3 bg-orange-100 rounded-2xl flex items-center justify-center text-orange-700 shadow-inner">
+        <div className={`${wrapperClass} ${fullSize ? 'bg-orange-50 text-orange-700' : 'bg-orange-100 text-orange-700'}`}>
           <ShoppingBag className={className} size={size} />
         </div>
       );
     case 'water':
       return (
-        <div className="p-3 bg-sky-100 rounded-2xl flex items-center justify-center text-sky-600 shadow-inner">
+        <div className={`${wrapperClass} ${fullSize ? 'bg-sky-50 text-sky-600' : 'bg-sky-100 text-sky-600'}`}>
           <Droplet className={className} size={size} />
         </div>
       );
     case 'sugar':
       return (
-        <div className="p-3 bg-purple-100 rounded-2xl flex items-center justify-center text-purple-600 shadow-inner">
+        <div className={`${wrapperClass} ${fullSize ? 'bg-purple-50 text-purple-600' : 'bg-purple-100 text-purple-600'}`}>
           <Dices className={className} size={size} />
         </div>
       );
     default:
       return (
-        <div className="p-3 bg-slate-200 rounded-2xl flex items-center justify-center text-slate-600 shadow-inner">
+        <div className={`${wrapperClass} ${fullSize ? 'bg-slate-50 text-slate-600' : 'bg-slate-200 text-slate-600'}`}>
           <FileBox className={className} size={size} />
         </div>
       );

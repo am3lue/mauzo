@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Lock, Unlock, Users, ShieldAlert, CheckCircle, ArrowLeft, KeyRound } from 'lucide-react';
+import { Lock, Unlock, Users, ShieldAlert, CheckCircle, KeyRound } from 'lucide-react';
 import { User } from '../types';
 
 interface LoginScreenProps {
@@ -7,7 +7,7 @@ interface LoginScreenProps {
   activeSeller: User;
   sellers: User[];
   onLoginSuccess: (userId: string | 'boss') => void;
-  onCancel: () => void;
+  onChangeRole: (role: 'seller' | 'boss') => void;
   currentSellerIndex: number;
   onSelectSeller: (index: number) => void;
 }
@@ -17,7 +17,7 @@ export default function LoginScreen({
   activeSeller,
   sellers,
   onLoginSuccess,
-  onCancel,
+  onChangeRole,
   currentSellerIndex,
   onSelectSeller,
 }: LoginScreenProps) {
@@ -116,20 +116,33 @@ export default function LoginScreen({
           role === 'boss' ? 'bg-amber-400' : 'bg-indigo-400'
         }`} />
 
-        {/* Header / Mode Indicator */}
-        <div className="flex items-center gap-2 mb-6 self-start">
-          <button 
-            onClick={onCancel}
-            className="w-8 h-8 rounded-full clay-btn flex items-center justify-center text-slate-500 hover:text-slate-800 transition-all active:scale-95"
-            title="Rudi Nyuma"
+        {/* Unified Role Segmented Switcher inside login card */}
+        <div className="w-full bg-slate-200/80 p-1 rounded-2xl border border-slate-300/40 shadow-inner flex items-center mb-6 gap-1 font-sans">
+          <button
+            type="button"
+            onClick={() => onChangeRole('seller')}
+            className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+              role === 'seller'
+                ? 'bg-white text-indigo-700 shadow font-extrabold scale-[1.02]'
+                : 'text-slate-500 hover:text-slate-800'
+            }`}
           >
-            <ArrowLeft size={16} />
+            <Users size={14} />
+            <span>Muuzaji (POS)</span>
           </button>
           
-          <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-200/80 border border-slate-300/30 text-[10px] font-mono font-bold uppercase text-slate-500 shadow-inner">
-            <KeyRound size={10} />
-            <span>{role === 'boss' ? 'Ripoti / Management' : 'Njia ya POS / Muuzaji'}</span>
-          </div>
+          <button
+            type="button"
+            onClick={() => onChangeRole('boss')}
+            className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+              role === 'boss'
+                ? 'bg-white text-amber-700 shadow font-extrabold scale-[1.02]'
+                : 'text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            <ShieldAlert size={14} />
+            <span>Boss (Reports)</span>
+          </button>
         </div>
 
         {/* Lock / Unlock Tactile Icon Orbs */}
