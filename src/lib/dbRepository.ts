@@ -65,7 +65,8 @@ export class TursoDbRepository implements IDbRepository {
       try {
         const prodInfo = await this.client.execute("PRAGMA table_info(products)");
         const cols = prodInfo.rows.map(r => String(r.name).toLowerCase());
-        if (cols.length > 0 && !cols.includes("price")) {
+        const pkCols = prodInfo.rows.filter(r => Number(r.pk) > 0).map(r => String(r.name).toLowerCase());
+        if (cols.length > 0 && (!cols.includes("price") || !pkCols.includes("store_code"))) {
           shouldDropProducts = true;
         }
       } catch (e) {}
@@ -73,7 +74,8 @@ export class TursoDbRepository implements IDbRepository {
       try {
         const salesInfo = await this.client.execute("PRAGMA table_info(selling_logs)");
         const cols = salesInfo.rows.map(r => String(r.name).toLowerCase());
-        if (cols.length > 0 && !cols.includes("items")) {
+        const pkCols = salesInfo.rows.filter(r => Number(r.pk) > 0).map(r => String(r.name).toLowerCase());
+        if (cols.length > 0 && (!cols.includes("items") || !pkCols.includes("store_code"))) {
           shouldDropSellingLogs = true;
         }
       } catch (e) {}
@@ -81,7 +83,8 @@ export class TursoDbRepository implements IDbRepository {
       try {
         const usersInfo = await this.client.execute("PRAGMA table_info(users)");
         const cols = usersInfo.rows.map(r => String(r.name).toLowerCase());
-        if (cols.length > 0 && !cols.includes("pin")) {
+        const pkCols = usersInfo.rows.filter(r => Number(r.pk) > 0).map(r => String(r.name).toLowerCase());
+        if (cols.length > 0 && (!cols.includes("pin") || !pkCols.includes("store_code"))) {
           shouldDropUsers = true;
         }
       } catch (e) {}

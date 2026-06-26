@@ -17,7 +17,8 @@ import {
   Smile,
   ShieldCheck,
   CheckCircle,
-  AlertCircle
+  AlertCircle,
+  Trash2
 } from 'lucide-react';
 import { Product, Sale, User } from './types';
 import { DEFAULT_PRODUCTS, DEFAULT_SALES } from './initialData';
@@ -243,6 +244,16 @@ export default function App() {
     setAuthenticatedSellerId(null);
     setIsBossAuthenticated(false);
     setSessionId(null);
+  };
+
+  const handleResetData = () => {
+    if (window.confirm("Je, una uhakika unataka kufuta data zote zilizopo na kuanza upya na duka tupu? Kitendo hiki hakirudishwi.")) {
+      localStorage.removeItem('mauzo_products');
+      localStorage.removeItem('mauzo_sales');
+      setProducts([]);
+      setSales([]);
+      alert("Duka lako sasa lipo tupu kabisa! Unaweza kuanza kuandika Bidhaa mpya na kufanya Mauzo mapya sasa.");
+    }
   };
 
   // Calculations
@@ -671,10 +682,20 @@ export default function App() {
         </main>
 
         {/* PERSURE INFORMATIONAL NOTIFICATION */}
-        <footer className="mt-8 text-center border-t border-slate-300/40 pt-4 flex flex-col md:flex-row items-center justify-between text-xs text-slate-500 font-mono gap-4">
-          <div className="flex items-center gap-2">
-            <Activity size={12} className="text-indigo-500 animate-pulse" />
-            <span>Mauzo Offline-First Engine (Active): <strong>Room Local Sandbox</strong></span>
+        <footer className="mt-8 text-center border-t border-slate-300/40 pt-4 flex flex-col md:flex-row items-center justify-between text-xs text-slate-500 font-mono gap-4 p-4">
+          <div className="flex flex-wrap items-center gap-4">
+            <div className="flex items-center gap-2">
+              <Activity size={12} className="text-indigo-500 animate-pulse" />
+              <span>Mauzo Offline-First Engine (Active): <strong>Room Local Sandbox</strong></span>
+            </div>
+            <button
+              onClick={handleResetData}
+              className="flex items-center gap-1.5 px-3 py-1 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200/50 rounded-xl transition-all font-bold cursor-pointer"
+              title="Bonyeza hapa kufuta data zote zilizopo na kuanza upya"
+            >
+              <Trash2 size={11} />
+              <span>Safisha Data (Reset Data)</span>
+            </button>
           </div>
           <div>
             <span>© 2026 Mauzo App. Swahili Small Shop Duka Optimizer.</span>
