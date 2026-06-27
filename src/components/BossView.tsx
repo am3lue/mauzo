@@ -235,6 +235,15 @@ export default function BossView({
     return Math.max(...vals, 1000); // Avoid dividing by 0
   }, [categorySalesData]);
 
+  // Safe CSV cell encoder - handles quotes, commas, and newlines
+  const csvCell = (value: unknown): string => {
+    const str = value == null ? '' : String(value);
+    if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
+      return '"' + str.replace(/"/g, '""') + '"';
+    }
+    return str;
+  };
+
   // Excel / CSV Export Logic
   const handleExportCSV = () => {
     if (sales.length === 0) {
@@ -257,7 +266,6 @@ export default function BossView({
     ].join(',');
 
     const rows = sales.map(sale => {
-      // Create readable item descriptions e.g. "Sembe (2) + Cola (1)"
       const itemsString = sale.items
         .map(i => `${i.name} (x${i.quantity})`)
         .join('; ');
@@ -265,16 +273,16 @@ export default function BossView({
       const debtOutstanding = sale.isDebt ? Math.max(0, sale.total - (sale.debtPaidAmount || 0)) : 0;
       
       const columns = [
-        sale.id,
-        new Date(sale.createdAt).toLocaleString().replace(/,/g, ''),
-        sale.sellerName,
-        `"${itemsString.replace(/"/g, '""')}"`, // escape quotes for csv conformity
-        sale.total,
-        sale.amountReceived,
-        debtOutstanding,
-        sale.debtorName ? `"${sale.debtorName.replace(/"/g, '""')}"` : 'N/A',
-        sale.debtorPhone || 'N/A',
-        sale.isDebt ? (sale.debtStatus || 'unpaid') : 'Cash'
+        csvCell(sale.id),
+        csvCell(new Date(sale.createdAt).toLocaleString()),
+        csvCell(sale.sellerName),
+        csvCell(itemsString),
+        csvCell(sale.total),
+        csvCell(sale.amountReceived),
+        csvCell(debtOutstanding),
+        csvCell(sale.debtorName || 'N/A'),
+        csvCell(sale.debtorPhone || 'N/A'),
+        csvCell(sale.isDebt ? (sale.debtStatus || 'unpaid') : 'Cash')
       ];
 
       return columns.join(',');
@@ -295,56 +303,54 @@ export default function BossView({
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Show temporary preview immediately
+    setIsUploadingImage(true);
+
+    // Read the file once - use the same base64 for both preview and upload
     const reader = new FileReader();
-    reader.onloadend = () => {
-      setImagePreview(reader.result as string);
+    reader.onloadend = async () => {
+      const rawBase64 = reader.result as string;
+
+      // Show temporary preview immediately
+      setImagePreview(rawBase64);
+
+      try {
+        const res = await fetch('/api/upload', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            image: rawBase64,
+            name: file.name
+          })
+        });
+
+        if (!res.ok) {
+          const errData = await res.json();
+          throw new Error(errData.error || 'Imeshindwa kupakia picha.');
+        }
+
+        const result = await res.json();
+        if (result.success && result.url) {
+          setNewProdImage(result.url);
+          if (result.warning) {
+            console.warn(result.warning);
+          }
+        } else {
+          throw new Error('Url ya picha haikurejeshwa ipasavyo.');
+        }
+      } catch (uploadErr: any) {
+        console.error('Picha upload error:', uploadErr);
+        alert(`Upakiaji wa picha umeshindwa: ${uploadErr.message || uploadErr}`);
+      } finally {
+        setIsUploadingImage(false);
+      }
+    };
+    reader.onerror = () => {
+      setIsUploadingImage(false);
+      alert('Imeshindwa kusoma faili la picha.');
     };
     reader.readAsDataURL(file);
-
-    setIsUploadingImage(true);
-    try {
-      const base64Reader = new FileReader();
-      base64Reader.readAsDataURL(file);
-      base64Reader.onloadend = async () => {
-        const rawBase64 = base64Reader.result as string;
-        try {
-          const res = await fetch('/api/upload', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-              image: rawBase64,
-              name: file.name
-            })
-          });
-
-          if (!res.ok) {
-            const errData = await res.json();
-            throw new Error(errData.error || 'Imeshindwa kupakia picha.');
-          }
-
-          const result = await res.json();
-          if (result.success && result.url) {
-            setNewProdImage(result.url);
-            if (result.warning) {
-              console.warn(result.warning);
-            }
-          } else {
-            throw new Error('Url ya picha haikurejeshwa ipasavyo.');
-          }
-        } catch (uploadErr: any) {
-          console.error('Picha upload error:', uploadErr);
-          alert(`Upakiaji wa picha umeshindwa: ${uploadErr.message || uploadErr}`);
-        } finally {
-          setIsUploadingImage(false);
-        }
-      };
-    } catch (err) {
-      console.error(err);
-      setIsUploadingImage(false);
-    }
   };
 
   // Add Product Handler
@@ -367,7 +373,7 @@ export default function BossView({
       return;
     }
 
-    const targetId = newProdId.trim() || `prod-${Date.now().toString().slice(-4)}`;
+    const targetId = newProdId.trim() || `prod-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     // Hakikisha ID ya bidhaa haijarudiwa
     if (products.some(p => p.id.toLowerCase() === targetId.toLowerCase())) {
@@ -435,7 +441,7 @@ export default function BossView({
     e.preventDefault();
     const payAmount = parseFloat(settleAmount);
     if (isNaN(payAmount) || payAmount <= 0) {
-      alert('Tafadhali weka kiasi sahihi cha pesa.');
+      alert('Tafadhali weka kiasi sahihi cha pesa (lazima kiwe zaidi ya 0).');
       return;
     }
 
@@ -699,7 +705,7 @@ export default function BossView({
             <div className="clay-card p-6 flex flex-col justify-between hover:scale-[1.01] transition-transform duration-250">
               <div className="flex items-center justify-between mb-4">
                 <span className="text-xs text-slate-500 font-bold uppercase tracking-wider">Kesh iliyopo (Cash)</span>
-                <div className="w-8 h-8 rounded-full bg-emerald-55 flex items-center justify-center">
+                <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center">
                   <Coins size={16} className="text-emerald-600" />
                 </div>
               </div>
@@ -1325,7 +1331,7 @@ export default function BossView({
                     }
 
                     const newUser: User = {
-                      id: 'user-' + Date.now().toString().slice(-6),
+                      id: 'user-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
                       name: userName.trim(),
                       role: userRole,
                       pin: userPin
@@ -1560,7 +1566,7 @@ export default function BossView({
                   />
                   <button
                     type="button"
-                    onClick={() => setNewProdId(`prod-${Date.now().toString().slice(-4)}`)}
+                    onClick={() => setNewProdId(`prod-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)}
                     className="px-3 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200/60 rounded-xl font-bold text-xs text-indigo-700 hover:scale-105 active:scale-95 transition-all flex items-center justify-center whitespace-nowrap"
                   >
                     Auto ID

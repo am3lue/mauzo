@@ -287,7 +287,7 @@ export default function SellerView({
     }));
 
     const newSale: Sale = {
-      id: `sale-${Date.now().toString().slice(-4)}`,
+      id: `sale-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       items: saleItems,
       total: cartTotal,
       amountReceived: amountReceived,

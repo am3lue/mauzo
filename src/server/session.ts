@@ -1,7 +1,11 @@
-import { getDbRepository } from '../lib/dbRepository.js';
+import { getDbRepository, IDbRepository } from '../lib/dbRepository.js';
 import crypto from 'crypto';
 
-const db = getDbRepository();
+let _db: IDbRepository | null = null;
+function db(): IDbRepository {
+  if (!_db) _db = getDbRepository();
+  return _db;
+}
 
 // Standard session duration (e.g. 7 days in milliseconds)
 const SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
@@ -38,7 +42,7 @@ export async function loginSessionHandler(
     expiresAt,
   };
 
-  const success = await db.saveUserSession(session);
+  const success = await db().saveUserSession(session);
   if (success) {
     return session;
   }
@@ -49,7 +53,7 @@ export async function loginSessionHandler(
  * Log out a session by marking its status as logged_out and setting expiresAt to now.
  */
 export async function logoutSessionHandler(sessionId: string): Promise<boolean> {
-  const session = await db.getUserSession(sessionId);
+  const session = await db().getUserSession(sessionId);
   if (!session) {
     return false;
   }
@@ -60,7 +64,7 @@ export async function logoutSessionHandler(sessionId: string): Promise<boolean> 
     expiresAt: Date.now(),
   };
 
-  return await db.saveUserSession(updatedSession);
+  return await db().saveUserSession(updatedSession);
 }
 
 /**
@@ -71,7 +75,7 @@ export async function checkSessionHandler(sessionId: string): Promise<{
   session: SessionData | null;
   message: string;
 }> {
-  const session = await db.getUserSession(sessionId);
+  const session = await db().getUserSession(sessionId);
   if (!session) {
     return { isValid: false, session: null, message: 'Session haipatikani.' };
   }
@@ -91,7 +95,7 @@ export async function checkSessionHandler(sessionId: string): Promise<{
  * Fetches all active sessions for a specific store or optionally a specific user inside that store.
  */
 export async function getActiveSessionsHandler(storeCode: string, userId?: string): Promise<SessionData[]> {
-  const sessions = await db.getUserSessions(storeCode, userId);
+  const sessions = await db().getUserSessions(storeCode, userId);
   const now = Date.now();
   // Filter active and non-expired sessions
   return sessions.filter((s) => s.status === 'active' && now <= s.expiresAt);

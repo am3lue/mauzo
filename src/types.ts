@@ -44,6 +44,7 @@ export interface User {
   name: string;
   role: 'boss' | 'seller';
   pin?: string;
+  updatedAt?: string;
 }
 
 export interface DebtPayment {

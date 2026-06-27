@@ -1,7 +1,14 @@
+import dotenv from 'dotenv';
+dotenv.config();
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
-import { createServer as createViteServer } from 'vite';
+// import { createServer as createViteServer } from 'vite';
+
+// CORS configuration - allow known origins or same-origin requests
+const ALLOWED_ORIGINS = process.env.CORS_ORIGINS
+  ? process.env.CORS_ORIGINS.split(',').map(o => o.trim())
+  : [];
 
 // Architectural repository, adapter, and rate limiter imports
 import { getDbRepository } from '../src/lib/dbRepository.js';
@@ -29,6 +36,24 @@ import {
 } from '../src/server/session.js';
 
 const app = express();
+
+// CORS middleware - allows same-origin and configured origins
+app.use((req, res, next) => {
+  const origin = req.headers['origin'];
+  if (origin) {
+    const isAllowed = ALLOWED_ORIGINS.length === 0 || ALLOWED_ORIGINS.includes(origin) || ALLOWED_ORIGINS.includes('*');
+    if (isAllowed) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+    }
+  }
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+  next();
+});
 
 // Set up security headers middleware
 app.use((req, res, next) => {

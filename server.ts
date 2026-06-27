@@ -1,3 +1,5 @@
+import dotenv from 'dotenv';
+dotenv.config();
 import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
@@ -21,7 +23,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Production Ready App Server started. Listening on http://0.0.0.0:${PORT}`);
+    console.log(`🚀 Production Ready App Server started. Listening on http://localhost:${PORT}`);
   });
 }
 

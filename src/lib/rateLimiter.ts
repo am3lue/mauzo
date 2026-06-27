@@ -9,6 +9,7 @@ export class SlidingWindowRateLimiter {
   private windowSizeMs: number;
   private maxRequests: number;
   private ipRecords: Map<string, RateLimitRecord>;
+  private pruneTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(windowSizeMs: number = 60 * 1000, maxRequests: number = 60) {
     this.windowSizeMs = windowSizeMs;
@@ -16,7 +17,19 @@ export class SlidingWindowRateLimiter {
     this.ipRecords = new Map();
 
     // Periodically prune stale IP records to prevent memory leaks in continuous runtime environments
-    setInterval(() => this.pruneStaleRecords(), 5 * 60 * 1000); // every 5 minutes
+    this.pruneTimer = setInterval(() => this.pruneStaleRecords(), 5 * 60 * 1000); // every 5 minutes
+    if (typeof this.pruneTimer === 'object' && 'unref' in this.pruneTimer) {
+      (this.pruneTimer as any).unref();
+    }
+  }
+
+  /** Release interval timer for cleanup (e.g. during HMR or serverless warm boot) */
+  public destroy(): void {
+    if (this.pruneTimer) {
+      clearInterval(this.pruneTimer);
+      this.pruneTimer = null;
+    }
+    this.ipRecords.clear();
   }
 
   public isAllowed(ip: string): { allowed: boolean; remaining: number; resetTime: number } {

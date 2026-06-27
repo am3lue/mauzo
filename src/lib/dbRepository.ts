@@ -41,16 +41,47 @@ export interface IDbRepository {
   getUserSessions(storeCode: string, userId?: string): Promise<any[]>;
 }
 
+// Retry transient DNS/network errors (e.g. EAI_AGAIN) up to 3 times with backoff
+async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
+  let lastError: any;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      lastError = err;
+      const msg = String(err?.message || err?.cause?.message || '');
+      const isTransient =
+        msg.includes('EAI_AGAIN') ||
+        msg.includes('fetch failed') ||
+        msg.includes('ECONNREFUSED') ||
+        msg.includes('ETIMEDOUT') ||
+        msg.includes('ECONNRESET') ||
+        msg.includes('socket hang up');
+      if (isTransient && attempt < 3) {
+        await new Promise(r => setTimeout(r, 1000 * attempt)); // 1s, then 2s
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastError;
+}
+
 // ------------------ Turso (libSQL) Implementation ------------------
 export class TursoDbRepository implements IDbRepository {
   private client: ReturnType<typeof createClient>;
   private isInitialized = false;
 
   constructor(url: string, token?: string) {
-    this.client = createClient({
+    const rawClient = createClient({
       url: url.trim(),
       authToken: token ? token.trim() : undefined,
     });
+    const origExecute = rawClient.execute.bind(rawClient);
+    const origBatch = rawClient.batch.bind(rawClient);
+    rawClient.execute = ((query: any) => withRetry(() => origExecute(query))) as typeof rawClient.execute;
+    rawClient.batch = ((statements: any[], mode?: string) => withRetry(() => origBatch(statements, mode))) as typeof rawClient.batch;
+    this.client = rawClient;
   }
 
   async initialize(): Promise<void> {
@@ -287,91 +318,67 @@ export class TursoDbRepository implements IDbRepository {
         throw new Error('Data payload is not an array');
       }
 
+      const buildBatchInsert = <T>(
+        table: string,
+        columns: string[],
+        extractArgs: (record: T) => any[],
+      ): { sql: string; args: any[] } | null => {
+        if (records.length === 0) return null;
+        const placeholders = columns.map(() => '?').join(', ');
+        const valuesClauses = records.map(() => `(${placeholders})`);
+        const sql = `INSERT INTO ${table} (${columns.join(', ')}) VALUES ${valuesClauses.join(', ')}`;
+        const args = records.flatMap((r) => extractArgs(r as T));
+        return { sql, args };
+      };
+
+      let statements: { sql: string; args: any[] }[] = [];
+
       if (column === 'sales_data') {
-        // 1. Delete existing sales
-        await this.client.execute({
+        statements.push({
           sql: `DELETE FROM selling_logs WHERE store_code = ?`,
           args: [cleanCode]
         });
-
-        // 2. Insert new sales
-        for (const s of records) {
-          await this.client.execute({
-            sql: `INSERT INTO selling_logs (
-              id, store_code, items, total, amount_received, change_given, seller_id, seller_name, 
-              created_at, updated_at, is_debt, debtor_name, debtor_phone, debt_status, debt_paid_amount
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            args: [
-              s.id,
-              cleanCode,
-              JSON.stringify(s.items || []),
-              s.total || 0,
-              s.amountReceived || 0,
-              s.changeGiven || 0,
-              s.sellerId || '',
-              s.sellerName || '',
-              s.createdAt,
-              s.updatedAt || s.createdAt,
-              s.isDebt ? 1 : 0,
-              s.debtorName || null,
-              s.debtorPhone || null,
-              s.debtStatus || null,
-              s.debtPaidAmount || 0
-            ]
-          });
-        }
+        const insert = buildBatchInsert<any>('selling_logs', [
+          'id', 'store_code', 'items', 'total', 'amount_received', 'change_given',
+          'seller_id', 'seller_name', 'created_at', 'updated_at', 'is_debt',
+          'debtor_name', 'debtor_phone', 'debt_status', 'debt_paid_amount'
+        ], (s) => [
+          s.id, cleanCode, JSON.stringify(s.items || []), s.total || 0,
+          s.amountReceived || 0, s.changeGiven || 0, s.sellerId || '',
+          s.sellerName || '', s.createdAt, s.updatedAt || s.createdAt,
+          s.isDebt ? 1 : 0, s.debtorName || null, s.debtorPhone || null,
+          s.debtStatus || null, s.debtPaidAmount || 0
+        ]);
+        if (insert) statements.push(insert);
       } else if (column === 'products_data') {
-        // 1. Delete existing products
-        await this.client.execute({
+        statements.push({
           sql: `DELETE FROM products WHERE store_code = ?`,
           args: [cleanCode]
         });
-
-        // 2. Insert new products
-        for (const p of records) {
-          await this.client.execute({
-            sql: `INSERT INTO products (
-              id, store_code, name, price, category, image, stock, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            args: [
-              p.id,
-              cleanCode,
-              p.name,
-              p.price || 0,
-              p.category || null,
-              p.image || null,
-              p.stock || 0,
-              p.createdAt,
-              p.updatedAt || p.createdAt
-            ]
-          });
-        }
+        const insert = buildBatchInsert<any>('products', [
+          'id', 'store_code', 'name', 'price', 'category', 'image',
+          'stock', 'created_at', 'updated_at'
+        ], (p) => [
+          p.id, cleanCode, p.name, p.price || 0, p.category || null,
+          p.image || null, p.stock || 0, p.createdAt, p.updatedAt || p.createdAt
+        ]);
+        if (insert) statements.push(insert);
       } else if (column === 'users_data') {
-        // 1. Delete existing users
-        await this.client.execute({
+        statements.push({
           sql: `DELETE FROM users WHERE store_code = ?`,
           args: [cleanCode]
         });
-
-        // 2. Insert new users
-        for (const u of records) {
-          await this.client.execute({
-            sql: `INSERT INTO users (
-              id, store_code, name, role, pin, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?)`,
-            args: [
-              u.id,
-              cleanCode,
-              u.name,
-              u.role,
-              u.pin || null,
-              new Date().toISOString()
-            ]
-          });
-        }
+        const insert = buildBatchInsert<any>('users', [
+          'id', 'store_code', 'name', 'role', 'pin', 'created_at'
+        ], (u) => [
+          u.id, cleanCode, u.name, u.role, u.pin || null,
+          u.createdAt || new Date().toISOString()
+        ]);
+        if (insert) statements.push(insert);
       }
 
-      // 3. Update session updated_at timestamp
+      await this.client.batch(statements, 'write');
+
       await this.client.execute({
         sql: `
           INSERT INTO sessions (store_code, updated_at)
@@ -584,10 +591,43 @@ export class FileSystemDbRepository implements IDbRepository {
     if (!fs.existsSync(this.baseDir)) {
       fs.mkdirSync(this.baseDir, { recursive: true });
     }
+    // Restore sessions from disk on startup
+    this.loadSessionsFromDisk();
   }
 
   async initialize(): Promise<void> {
     // Already verified base directory is established in constructor
+  }
+
+  private get sessionsFilePath(): string {
+    return path.join(this.baseDir, 'mzo_sessions.json');
+  }
+
+  private loadSessionsFromDisk(): void {
+    try {
+      if (fs.existsSync(this.sessionsFilePath)) {
+        const text = fs.readFileSync(this.sessionsFilePath, 'utf-8');
+        if (text && text.trim()) {
+          const data = JSON.parse(text);
+          if (Array.isArray(data)) {
+            for (const entry of data) {
+              this.sessionMap.set(entry.sessionId, entry);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('FileSystemDbRepository: Failed to load sessions from disk:', err);
+    }
+  }
+
+  private persistSessions(): void {
+    try {
+      const data = JSON.stringify(Array.from(this.sessionMap.values()));
+      fs.writeFileSync(this.sessionsFilePath, data, 'utf-8');
+    } catch (err) {
+      console.error('FileSystemDbRepository: Failed to persist sessions to disk:', err);
+    }
   }
 
   private getFilePath(storeCode: string, prefix: string): string {
@@ -699,6 +739,7 @@ export class FileSystemDbRepository implements IDbRepository {
     expiresAt: number;
   }): Promise<boolean> {
     this.sessionMap.set(session.sessionId, { ...session, storeCode: session.storeCode.toUpperCase() });
+    this.persistSessions();
     return true;
   }
 

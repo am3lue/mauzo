@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { 
   ShoppingBag, 
   TrendingUp, 
@@ -26,6 +26,19 @@ import SellerView from './components/SellerView';
 import BossView from './components/BossView';
 import LoginScreen from './components/LoginScreen';
 
+// Fetch with timeout helper to prevent hanging requests
+async function fetchWithTimeout(url: string, options: RequestInit & { timeout?: number } = {}): Promise<Response> {
+  const { timeout = 10000, ...fetchOptions } = options;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    const response = await fetch(url, { ...fetchOptions, signal: controller.signal });
+    return response;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export default function App() {
   // List of sellers and bosses with their PINs, syncs automatically with Turso database!
   const [sellers, setSellers] = useState<User[]>(() => {
@@ -48,11 +61,14 @@ export default function App() {
     return localStorage.getItem('mauzo_last_synced_time');
   });
 
+  // Loading state for initial Turso data fetch (shows splash while loading)
+  const [isTursoLoading, setIsTursoLoading] = useState(() => localStorage.getItem('mauzo_products') === null);
+
   // Unique Cloud Sync Code (allows syncing different devices together)
   const [workspaceCode, setWorkspaceCode] = useState<string>(() => {
     const saved = localStorage.getItem('mauzo_workspace_code');
     if (saved) return saved.toUpperCase();
-    const randCode = 'MZO-' + Math.floor(1000 + Math.random() * 9000);
+    const randCode = 'MZO-' + Date.now().toString(36).toUpperCase() + '-' + Math.random().toString(36).slice(2, 6).toUpperCase();
     localStorage.setItem('mauzo_workspace_code', randCode);
     return randCode;
   });
@@ -61,13 +77,13 @@ export default function App() {
   const [clientId] = useState<string>(() => {
     let id = localStorage.getItem('mauzo_sync_client_id');
     if (!id) {
-      id = 'MZO-CLI-' + Math.floor(10000 + Math.random() * 90000) + '-' + Date.now().toString().slice(-4);
+      id = 'MZO-CLI-' + Math.random().toString(36).slice(2, 10) + '-' + Date.now();
       localStorage.setItem('mauzo_sync_client_id', id);
     }
     return id;
   });
 
-  // States with LocalStorage Persistence
+  // States with LocalStorage Persistence (used as offline fallback cache)
   const [products, setProducts] = useState<Product[]>(() => {
     const saved = localStorage.getItem('mauzo_products');
     return saved ? JSON.parse(saved) : DEFAULT_PRODUCTS;
@@ -93,6 +109,13 @@ export default function App() {
   const [isBossAuthenticated, setIsBossAuthenticated] = useState<boolean>(() => {
     return localStorage.getItem('mauzo_auth_boss') === 'true';
   });
+
+  const productsRef = useRef(products);
+  productsRef.current = products;
+  const salesRef = useRef(sales);
+  salesRef.current = sales;
+  const sellersRef = useRef(sellers);
+  sellersRef.current = sellers;
 
   const [sessionId, setSessionId] = useState<string | null>(() => {
     return localStorage.getItem('mauzo_session_id');
@@ -174,12 +197,10 @@ export default function App() {
   const activeSeller = onlySellers[currentSellerIndex] || onlySellers[0] || { id: 'user-seller-1', name: 'Amisi Mapesa', role: 'seller', pin: '1111' };
 
   const handleRoleChange = (role: 'seller' | 'boss') => {
-    // Clear active auth status for safety to require a fresh secure sign-in 
-    if (role === 'boss') {
-      setIsBossAuthenticated(false);
-    } else {
-      setAuthenticatedSellerId(null);
-    }
+    // Clear active session and auth to require fresh login
+    setAuthenticatedSellerId(null);
+    setIsBossAuthenticated(false);
+    setSessionId(null);
     setCurrentRole(role);
   };
 
@@ -246,14 +267,36 @@ export default function App() {
     setSessionId(null);
   };
 
-  const handleResetData = () => {
-    if (window.confirm("Je, una uhakika unataka kufuta data zote zilizopo na kuanza upya na duka tupu? Kitendo hiki hakirudishwi.")) {
-      localStorage.removeItem('mauzo_products');
-      localStorage.removeItem('mauzo_sales');
-      setProducts([]);
-      setSales([]);
-      alert("Duka lako sasa lipo tupu kabisa! Unaweza kuanza kuandika Bidhaa mpya na kufanya Mauzo mapya sasa.");
+  const handleResetData = async () => {
+    if (!window.confirm("Je, una uhakika unataka kufuta data zote zilizopo na kuanza upya na duka tupu? Kitendo hiki hakirudishwi.")) return;
+
+    // Clear local cache first
+    localStorage.removeItem('mauzo_products');
+    localStorage.removeItem('mauzo_sales');
+    localStorage.removeItem('mauzo_last_synced_time');
+    setProducts([]);
+    setSales([]);
+
+    // Also push empty data to Turso so the reset persists across reloads
+    try {
+      const code = workspaceCode.replace(/[^a-zA-Z0-9-]/g, '').trim().toUpperCase();
+      if (code) {
+        await Promise.all([
+          fetchWithTimeout(`/api/sync/${code}/sales`, {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: '[]', timeout: 10000
+          }),
+          fetchWithTimeout(`/api/sync/${code}/products`, {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: '[]', timeout: 10000
+          }),
+        ]);
+      }
+    } catch {
+      // Turso unreachable — reset will apply on next successful sync
     }
+
+    alert("Duka lako sasa lipo tupu kabisa! Unaweza kuanza kuandika Bidhaa mpya na kufanya Mauzo mapya sasa.");
   };
 
   // Calculations
@@ -330,16 +373,42 @@ export default function App() {
   };
 
   const handleUpdateSellers = (updatedSellers: User[]) => {
-    setSellers(updatedSellers);
+    setSellers(updatedSellers.map(u => ({
+      ...u,
+      updatedAt: u.updatedAt || new Date().toISOString()
+    })));
     triggerAutoSync();
   };
 
+  // Lock heartbeat - periodically renews the lease so slow syncs don't lose their lock
+  const startLockHeartbeat = (code: string, beatClientId: string) => {
+    return setInterval(async () => {
+      try {
+        await fetchWithTimeout(`/api/sync/${code}/lock`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ clientId: beatClientId }),
+          timeout: 8000
+        });
+      } catch {
+        // Heartbeat failure is non-fatal; the sync continues with the remaining lease window
+      }
+    }, 12000);
+  };
+
   // Real Cloud Database Sync Engine (REST KeyValue cloud storage)
-  const handleSyncDatabases = async () => {
+  // Uses refs to always read the latest state, avoiding stale closure bugs
+  const handleSyncDatabases = useCallback(async () => {
     setIsSyncing(true);
     setActiveSyncError(null);
+
+    // Snapshot the latest state from refs at sync time, not closure capture time
+    const currentSales = salesRef.current;
+    const currentProducts = productsRef.current;
+    const currentSellers = sellersRef.current;
     
     let lockAcquired = false;
+    let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
     let formattedCode = '';
 
     try {
@@ -349,12 +418,13 @@ export default function App() {
       }
 
       // 1. Acquire Distributed Sync Lock from the backend
-      const lockRes = await fetch(`/api/sync/${formattedCode}/lock`, {
+      const lockRes = await fetchWithTimeout(`/api/sync/${formattedCode}/lock`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ clientId })
+        body: JSON.stringify({ clientId }),
+        timeout: 10000
       });
 
       if (!lockRes.ok) {
@@ -367,6 +437,8 @@ export default function App() {
       }
 
       lockAcquired = true;
+      // Start heartbeat to keep the lease alive during potentially long operations
+      heartbeatTimer = startLockHeartbeat(formattedCode, clientId);
       
       const salesUrl = `/api/sync/${formattedCode}/sales`;
       const productsUrl = `/api/sync/${formattedCode}/products`;
@@ -375,7 +447,7 @@ export default function App() {
       // 2. Fetch Cloud Sales (Handle empty bucket gracefully)
       let cloudSales: Sale[] = [];
       try {
-        const res = await fetch(salesUrl);
+        const res = await fetchWithTimeout(salesUrl, { timeout: 8000 });
         if (res.ok) {
           const text = await res.text();
           if (text && text.trim()) {
@@ -389,7 +461,7 @@ export default function App() {
       // 3. Fetch Cloud Products (Handle empty bucket gracefully)
       let cloudProducts: Product[] = [];
       try {
-        const res = await fetch(productsUrl);
+        const res = await fetchWithTimeout(productsUrl, { timeout: 8000 });
         if (res.ok) {
           const text = await res.text();
           if (text && text.trim()) {
@@ -403,7 +475,7 @@ export default function App() {
       // 3.5. Fetch Cloud Users (Handle empty bucket gracefully)
       let cloudUsers: User[] = [];
       try {
-        const res = await fetch(usersUrl);
+        const res = await fetchWithTimeout(usersUrl, { timeout: 8000 });
         if (res.ok) {
           const text = await res.text();
           if (text && text.trim()) {
@@ -419,81 +491,83 @@ export default function App() {
       let finalProductsList: Product[] = [];
       let finalUsersList: User[] = [];
 
-      const isCloudPopulated = cloudProducts.length > 0 || cloudSales.length > 0 || cloudUsers.length > 0;
-      if (!lastSyncedTime && isCloudPopulated) {
-        // If the client has never synced before and there is existing database data in the cloud,
-        // we directly adopt the cloud database records to override local dynamic startup timestamps.
-        finalSalesList = cloudSales.map(s => ({ ...s, synced: true }));
-        finalProductsList = cloudProducts;
-        finalUsersList = cloudUsers.length > 0 ? cloudUsers : sellers;
-      } else {
-        // Normal synchronization merge using timestamps
-        const mergedSalesMap = new Map<string, Sale>();
-        cloudSales.forEach(s => mergedSalesMap.set(s.id, s));
-        sales.forEach(ls => {
-          const cs = mergedSalesMap.get(ls.id);
-          if (!cs) {
+      // Normal synchronization merge using timestamps
+      const mergedSalesMap = new Map<string, Sale>();
+      cloudSales.forEach(s => mergedSalesMap.set(s.id, s));
+      currentSales.forEach(ls => {
+        const cs = mergedSalesMap.get(ls.id);
+        if (!cs) {
+          mergedSalesMap.set(ls.id, ls);
+        } else {
+          const lsTime = ls.updatedAt ? Date.parse(ls.updatedAt) : Date.parse(ls.createdAt);
+          const csTime = cs.updatedAt ? Date.parse(cs.updatedAt) : Date.parse(cs.createdAt);
+          if (lsTime > csTime) {
             mergedSalesMap.set(ls.id, ls);
-          } else {
-            const lsTime = ls.updatedAt ? Date.parse(ls.updatedAt) : Date.parse(ls.createdAt);
-            const csTime = cs.updatedAt ? Date.parse(cs.updatedAt) : Date.parse(cs.createdAt);
-            if (lsTime > csTime) {
-              mergedSalesMap.set(ls.id, ls);
-            }
           }
-        });
-        finalSalesList = Array.from(mergedSalesMap.values()).map(s => ({ ...s, synced: true }));
+        }
+      });
+      finalSalesList = Array.from(mergedSalesMap.values()).map(s => ({ ...s, synced: true }));
 
-        const mergedProductsMap = new Map<string, Product>();
-        cloudProducts.forEach(p => mergedProductsMap.set(p.id, p));
-        products.forEach(lp => {
-          const cp = mergedProductsMap.get(lp.id);
-          if (!cp) {
+      const mergedProductsMap = new Map<string, Product>();
+      cloudProducts.forEach(p => mergedProductsMap.set(p.id, p));
+      currentProducts.forEach(lp => {
+        const cp = mergedProductsMap.get(lp.id);
+        if (!cp) {
+          mergedProductsMap.set(lp.id, lp);
+        } else {
+          const lpTime = lp.updatedAt ? Date.parse(lp.updatedAt) : (lp.createdAt ? Date.parse(lp.createdAt) : 0);
+          const cpTime = cp.updatedAt ? Date.parse(cp.updatedAt) : (cp.createdAt ? Date.parse(cp.createdAt) : 0);
+          if (lpTime > cpTime) {
             mergedProductsMap.set(lp.id, lp);
-          } else {
-            const lpTime = lp.updatedAt ? Date.parse(lp.updatedAt) : (lp.createdAt ? Date.parse(lp.createdAt) : 0);
-            const cpTime = cp.updatedAt ? Date.parse(cp.updatedAt) : (cp.createdAt ? Date.parse(cp.createdAt) : 0);
-            if (lpTime > cpTime) {
-              mergedProductsMap.set(lp.id, lp);
-            }
           }
-        });
-        finalProductsList = Array.from(mergedProductsMap.values());
+        }
+      });
+      finalProductsList = Array.from(mergedProductsMap.values());
 
-        const mergedUsersMap = new Map<string, User>();
-        cloudUsers.forEach(u => mergedUsersMap.set(u.id, u));
-        sellers.forEach(lu => {
-          // Local state has latest credentials designated by our active Boss dashboard edits
+      const mergedUsersMap = new Map<string, User>();
+      cloudUsers.forEach(u => mergedUsersMap.set(u.id, u));
+      currentSellers.forEach(lu => {
+        const cu = mergedUsersMap.get(lu.id);
+        if (!cu) {
           mergedUsersMap.set(lu.id, lu);
-        });
-        finalUsersList = Array.from(mergedUsersMap.values());
-      }
+        } else {
+          const luTime = lu.updatedAt ? Date.parse(lu.updatedAt) : 0;
+          const cuTime = cu.updatedAt ? Date.parse(cu.updatedAt) : 0;
+          if (luTime >= cuTime) {
+            mergedUsersMap.set(lu.id, lu);
+          }
+        }
+      });
+      finalUsersList = Array.from(mergedUsersMap.values());
 
       // 6. Upload Merged Data to Cloud
-      const salesUploadRes = await fetch(salesUrl, {
+      const salesUploadRes = await fetchWithTimeout(salesUrl, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(finalSalesList)
+        body: JSON.stringify(finalSalesList),
+        timeout: 15000
       });
       
       if (!salesUploadRes.ok) {
         throw new Error("Imeshindwa kupakia data za mauzo kwenye wingu.");
       }
       
-      const productsUploadRes = await fetch(productsUrl, {
+      const productsUploadRes = await fetchWithTimeout(productsUrl, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(finalProductsList)
+        body: JSON.stringify(finalProductsList),
+        timeout: 15000
       });
       
       if (!productsUploadRes.ok) {
         throw new Error("Imeshindwa kupakia data za stoki kwenye wingu.");
       }
 
-      const usersUploadRes = await fetch(usersUrl, {
+      const usersUploadRes = await fetchWithTimeout(usersUrl, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(finalUsersList)
+        body: JSON.stringify(finalUsersList),
+        timeout: 15000
       });
       
       if (!usersUploadRes.ok) {
@@ -518,15 +592,21 @@ export default function App() {
       console.error("Sync Error: ", error);
       setActiveSyncError(error?.message || "Mawasiliano na wingu yalikatika. Jaribu tena.");
     } finally {
+      // Clear heartbeat before releasing lock
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+      }
       // 8. Safely unlock session to free slot for other devices
       if (lockAcquired && formattedCode) {
         try {
-          await fetch(`/api/sync/${formattedCode}/unlock`, {
+          await fetchWithTimeout(`/api/sync/${formattedCode}/unlock`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ clientId })
+            body: JSON.stringify({ clientId }),
+            timeout: 5000
           });
         } catch (unlockErr) {
           console.error("Taarifa ya unlock haikutumwa:", unlockErr);
@@ -534,28 +614,177 @@ export default function App() {
       }
       setIsSyncing(false);
     }
-  };
+  }, [workspaceCode, clientId]);
 
-  // Auto-sync trigger on initial mount & whenever workspaceCode changes to keep database updated
+  // Ref to skip the first workspaceCode sync effect (initial Turso load handles it)
+  const initialTursoLoadRef = useRef(false);
+
+  // Turso-first initial load: fetch from Turso API on mount, fall back to localStorage cache
   useEffect(() => {
-    if (workspaceCode) {
+    let cancelled = false;
+    const loadFromTurso = async () => {
+      try {
+        const code = workspaceCode.replace(/[^a-zA-Z0-9-]/g, '').trim().toUpperCase();
+        if (!code) return;
+
+        const [salesRes, productsRes, usersRes] = await Promise.all([
+          fetchWithTimeout(`/api/sync/${code}/sales`, { timeout: 8000 }),
+          fetchWithTimeout(`/api/sync/${code}/products`, { timeout: 8000 }),
+          fetchWithTimeout(`/api/sync/${code}/users`, { timeout: 8000 }),
+        ]);
+
+        if (cancelled) return;
+
+        if (salesRes.ok && productsRes.ok && usersRes.ok) {
+          const [cloudSales, cloudProducts, cloudUsers] = await Promise.all([
+            salesRes.json().catch(() => []),
+            productsRes.json().catch(() => []),
+            usersRes.json().catch(() => []),
+          ]);
+
+          if (cancelled) return;
+
+          // Turso is authoritative — override local state with cloud data
+          if (Array.isArray(cloudSales) && cloudSales.length > 0) {
+            setSales(cloudSales.map((s: Sale) => ({ ...s, synced: true })));
+          }
+          if (Array.isArray(cloudProducts) && cloudProducts.length > 0) {
+            setProducts(cloudProducts);
+          }
+          if (Array.isArray(cloudUsers) && cloudUsers.length > 0) {
+            setSellers(cloudUsers);
+          }
+
+          const nowStr = new Date().toLocaleString();
+          setLastSyncedTime(nowStr);
+          localStorage.setItem('mauzo_last_synced_time', nowStr);
+        }
+        // If Turso fetch fails, localStorage data (set in state initializers) is kept as fallback
+      } catch {
+        // Turso unavailable — localStorage fallback already in state
+      } finally {
+        if (!cancelled) {
+          initialTursoLoadRef.current = true;
+          setIsTursoLoading(false);
+        }
+      }
+    };
+
+    loadFromTurso();
+
+    return () => { cancelled = true; };
+  }, []); // runs once on mount
+
+  // Auto-sync when workspaceCode changes (skips first run — handled by initial load above)
+  useEffect(() => {
+    if (initialTursoLoadRef.current && workspaceCode) {
       const delaySync = setTimeout(() => {
         handleSyncDatabases();
-      }, 500); // 500ms delay to ensure DOM is ready and state is bound
+      }, 300);
       return () => clearTimeout(delaySync);
     }
+  }, [workspaceCode]);
+
+  // Passive pull every 45s: fetch cloud data and merge into local state
+  // so changes made on other devices appear automatically.
+  const POLL_INTERVAL_MS = 45000;
+  useEffect(() => {
+    if (!workspaceCode) return;
+    let cancelled = false;
+    const isSyncingRef = { current: false };
+
+    const pollFromTurso = async () => {
+      if (isSyncingRef.current) return;
+      isSyncingRef.current = true;
+      try {
+        const code = workspaceCode.replace(/[^a-zA-Z0-9-]/g, '').trim().toUpperCase();
+        if (!code) return;
+
+        const [salesRes, productsRes, usersRes] = await Promise.all([
+          fetchWithTimeout(`/api/sync/${code}/sales`, { timeout: 8000 }),
+          fetchWithTimeout(`/api/sync/${code}/products`, { timeout: 8000 }),
+          fetchWithTimeout(`/api/sync/${code}/users`, { timeout: 8000 }),
+        ]);
+
+        if (cancelled || !salesRes.ok || !productsRes.ok || !usersRes.ok) return;
+
+        const [cloudSales, cloudProducts, cloudUsers] = await Promise.all([
+          salesRes.json().catch(() => []),
+          productsRes.json().catch(() => []),
+          usersRes.json().catch(() => []),
+        ]);
+
+        if (cancelled) return;
+
+        const mergeByTimestamp = <T extends { id: string; updatedAt?: string; createdAt?: string }>(
+          local: T[],
+          cloud: T[],
+        ): T[] => {
+          const map = new Map<string, T>();
+          cloud.forEach(item => map.set(item.id, item));
+          local.forEach(item => {
+            const existing = map.get(item.id);
+            if (!existing) {
+              map.set(item.id, item);
+            } else {
+              const localTime = item.updatedAt ? Date.parse(item.updatedAt) : (item.createdAt ? Date.parse(item.createdAt) : 0);
+              const cloudTime = existing.updatedAt ? Date.parse(existing.updatedAt) : (existing.createdAt ? Date.parse(existing.createdAt) : 0);
+              if (localTime > cloudTime) {
+                map.set(item.id, item);
+              }
+            }
+          });
+          return Array.from(map.values());
+        };
+
+        if (Array.isArray(cloudSales)) {
+          setSales(prev => mergeByTimestamp(prev, cloudSales).map(s => ({ ...s, synced: true })));
+        }
+        if (Array.isArray(cloudProducts)) {
+          setProducts(prev => mergeByTimestamp(prev, cloudProducts));
+        }
+        if (Array.isArray(cloudUsers)) {
+          setSellers(prev => mergeByTimestamp(prev, cloudUsers));
+        }
+      } catch {
+        // Turso unreachable — will retry next interval
+      } finally {
+        isSyncingRef.current = false;
+      }
+    };
+
+    const interval = setInterval(pollFromTurso, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [workspaceCode]);
 
   return (
     <div className="min-h-screen bg-[#e0e5ec] relative overflow-hidden py-4 sm:py-8 px-2 sm:px-4 flex flex-col font-sans select-none selection:bg-indigo-100 selection:text-indigo-900">
       
+      {/* Turso Loading Splash Screen — shown until initial Turso fetch completes */}
+      {isTursoLoading && (
+        <div className="fixed inset-0 z-[9999] bg-[#e0e5ec] flex flex-col items-center justify-center gap-4">
+          <div className="w-16 h-16 rounded-3xl bg-gradient-to-tr from-indigo-500 to-indigo-600 flex items-center justify-center text-white shadow-xl">
+            <ShoppingBag className="w-8 h-8 stroke-[2]" />
+          </div>
+          <h1 className="font-sans font-black text-2xl text-slate-800 tracking-tight">Mauzo</h1>
+          <p className="text-sm text-slate-500 font-medium">Inapakia data kutoka kwenye Turso database...</p>
+          <div className="w-8 h-8 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin mt-2" />
+          {!localStorage.getItem('mauzo_products') && (
+            <p className="text-xs text-slate-400 mt-4">Ni mara yako ya kwanza. Tunatayarisha duka lako...</p>
+          )}
+        </div>
+      )}
+
       {/* Playful Floating Ambient Orbs for Claymorph Depth */}
       <div className="absolute top-12 left-10 w-96 h-96 bg-indigo-200/40 rounded-full filter blur-[100px] pointer-events-none animate-pulse"></div>
       <div className="absolute bottom-20 right-10 w-[450px] h-[450px] bg-sky-200/45 rounded-full filter blur-[120px] pointer-events-none"></div>
       <div className="absolute top-1/2 left-1/3 w-64 h-64 bg-rose-200/30 rounded-full filter blur-[90px] pointer-events-none"></div>
 
       {/* Main Container */}
-      <div className="max-w-7xl w-full mx-auto flex-1 flex flex-col relative z-10 clay-card overflow-hidden p-0 bg-[#f1f3f6] border border-white/60 shadow-xl rounded-[2.5rem]">
+      <div className={`max-w-7xl w-full mx-auto flex-1 flex flex-col relative z-10 clay-card overflow-hidden p-0 bg-[#f1f3f6] border border-white/60 shadow-xl rounded-[2.5rem] ${isTursoLoading ? 'opacity-0' : 'opacity-100 transition-opacity duration-500'}`}>
         
         {/* APP CONCAVE RAILHEADER */}
         <header className="p-4 sm:p-5 flex flex-row items-center justify-between gap-3 sm:gap-5 border-b border-slate-200 bg-slate-100/50">
@@ -686,7 +915,7 @@ export default function App() {
           <div className="flex flex-wrap items-center gap-4">
             <div className="flex items-center gap-2">
               <Activity size={12} className="text-indigo-500 animate-pulse" />
-              <span>Mauzo Offline-First Engine (Active): <strong>Room Local Sandbox</strong></span>
+              <span>Mauzo Primary Storage: <strong>Turso Database</strong> (localStorage fallback)</span>
             </div>
             <button
               onClick={handleResetData}
