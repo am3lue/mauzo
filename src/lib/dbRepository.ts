@@ -21,6 +21,9 @@ export interface LockInfo {
 export interface IDbRepository {
   initialize(): Promise<void>;
   getSyncData(storeCode: string): Promise<Partial<SyncData> | null>;
+  getSalesData(storeCode: string): Promise<any[]>;
+  getProductsData(storeCode: string): Promise<any[]>;
+  getUsersData(storeCode: string): Promise<any[]>;
   saveSyncData(storeCode: string, column: 'sales_data' | 'products_data' | 'users_data', dataJson: string): Promise<boolean>;
   acquireLock(storeCode: string, clientId: string, leaseMs: number): Promise<{ success: boolean; owner: string; expiresAt: number }>;
   releaseLock(storeCode: string, clientId: string): Promise<boolean>;
@@ -219,6 +222,7 @@ export class TursoDbRepository implements IDbRepository {
       await this.client.execute(`CREATE INDEX IF NOT EXISTS idx_selling_logs_store ON selling_logs(store_code);`);
       await this.client.execute(`CREATE INDEX IF NOT EXISTS idx_users_store ON users(store_code);`);
       await this.client.execute(`CREATE INDEX IF NOT EXISTS idx_user_sessions_store_user ON user_sessions(store_code, user_id);`);
+      await this.client.execute(`CREATE INDEX IF NOT EXISTS idx_locks_expires ON locks(expires_at);`);
 
       this.isInitialized = true;
       console.log('✓ Turso (libSQL) Database Repository initialized successfully with active schema.');
@@ -301,6 +305,66 @@ export class TursoDbRepository implements IDbRepository {
       console.error(`Turso getSyncData failure for ${cleanCode}:`, err);
       throw err;
     }
+  }
+
+  async getSalesData(storeCode: string): Promise<any[]> {
+    await this.initialize();
+    const cleanCode = storeCode.toUpperCase().trim();
+    const res = await this.client.execute({
+      sql: `SELECT id, items, total, amount_received, change_given, seller_id, seller_name, created_at, updated_at, is_debt, debtor_name, debtor_phone, debt_status, debt_paid_amount FROM selling_logs WHERE store_code = ?`,
+      args: [cleanCode]
+    });
+    return res.rows.map(row => ({
+      id: row.id,
+      items: JSON.parse((row.items as string) || '[]'),
+      total: row.total,
+      amountReceived: row.amount_received,
+      changeGiven: row.change_given,
+      sellerId: row.seller_id,
+      sellerName: row.seller_name,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      isDebt: row.is_debt === 1,
+      debtorName: row.debtor_name || undefined,
+      debtorPhone: row.debtor_phone || undefined,
+      debtStatus: row.debt_status || undefined,
+      debtPaidAmount: row.debt_paid_amount || 0
+    }));
+  }
+
+  async getProductsData(storeCode: string): Promise<any[]> {
+    await this.initialize();
+    const cleanCode = storeCode.toUpperCase().trim();
+    const res = await this.client.execute({
+      sql: `SELECT id, name, price, category, image, stock, created_at, updated_at FROM products WHERE store_code = ?`,
+      args: [cleanCode]
+    });
+    return res.rows.map(row => ({
+      id: row.id,
+      name: row.name,
+      price: row.price,
+      category: row.category,
+      image: row.image,
+      stock: row.stock,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    }));
+  }
+
+  async getUsersData(storeCode: string): Promise<any[]> {
+    await this.initialize();
+    const cleanCode = storeCode.toUpperCase().trim();
+    const res = await this.client.execute({
+      sql: `SELECT id, name, role, pin, created_at FROM users WHERE store_code = ?`,
+      args: [cleanCode]
+    });
+    return res.rows.map(row => ({
+      id: row.id,
+      name: row.name,
+      role: row.role,
+      pin: row.pin || undefined,
+      createdAt: row.created_at
+    }));
   }
 
   async saveSyncData(
@@ -409,34 +473,34 @@ export class TursoDbRepository implements IDbRepository {
         args: [now]
       });
 
-      // 2. Query active lock status
-      const current = await this.client.execute({
-        sql: `SELECT client_id, expires_at FROM locks WHERE store_code = ?`,
-        args: [cleanCode]
-      });
-
-      if (current.rows.length > 0) {
-        const activeOwner = current.rows[0].client_id as string;
-        const activeExpiry = current.rows[0].expires_at as number;
-
-        if (activeOwner !== clientId && now < activeExpiry) {
-          return { success: false, owner: activeOwner, expiresAt: activeExpiry };
-        }
-      }
-
-      // 3. Bind new lock lease ownership
-      await this.client.execute({
+      // 2. Atomic upsert: succeeds only if row doesn't exist,
+      //    we already own it, or the existing lock has expired.
+      //    Uses the WHERE clause on DO UPDATE to prevent stealing
+      //    a valid lock held by another client (eliminates race
+      //    condition from the previous check-then-set pattern).
+      const result = await this.client.execute({
         sql: `
           INSERT INTO locks (store_code, client_id, expires_at)
           VALUES (?, ?, ?)
           ON CONFLICT(store_code) DO UPDATE SET
             client_id = excluded.client_id,
             expires_at = excluded.expires_at
+          WHERE client_id = ? OR expires_at < ?
         `,
-        args: [cleanCode, clientId, expiresAt]
+        args: [cleanCode, clientId, expiresAt, clientId, now]
       });
 
-      return { success: true, owner: clientId, expiresAt };
+      if ((result.rowsAffected || 0) > 0) {
+        return { success: true, owner: clientId, expiresAt };
+      }
+
+      // Lock held by another client — query owner info
+      const ownerInfo = await this.getLockOwner(cleanCode);
+      return {
+        success: false,
+        owner: ownerInfo?.clientId || '',
+        expiresAt: ownerInfo?.expiresAt || 0
+      };
     } catch (err) {
       console.error(`Turso acquireLock error for ${cleanCode} by ${clientId}:`, err);
       return { success: false, owner: '', expiresAt: 0 };
@@ -678,6 +742,18 @@ export class FileSystemDbRepository implements IDbRepository {
       usersData,
       updatedAt: Date.now()
     };
+  }
+
+  async getSalesData(storeCode: string): Promise<any[]> {
+    return JSON.parse(this.readData(storeCode, 'sales'));
+  }
+
+  async getProductsData(storeCode: string): Promise<any[]> {
+    return JSON.parse(this.readData(storeCode, 'products'));
+  }
+
+  async getUsersData(storeCode: string): Promise<any[]> {
+    return JSON.parse(this.readData(storeCode, 'users'));
   }
 
   async saveSyncData(

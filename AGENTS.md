@@ -21,8 +21,8 @@ node dist/server.cjs   # Production server on :3000
 
 ## Architecture
 
-- **Primary storage**: Turso (libSQL over HTTP) — authoritative data store.
-- **Offline fallback**: browser localStorage, used only when Turso unreachable.
+- **Primary storage**: Turso (libSQL over HTTP) — single store code `MZO-MQWC95PB-XVG4` hardcoded in `App.tsx`.
+- **No offline fallback**: data always fetched fresh from Turso on mount (no localStorage cache for products/sales).
 - **Sync model**: client-side merge by `updatedAt` timestamp (not always-overwrite).
 - **Locking**: per-store-code lease-based lock via `locks` table.
 

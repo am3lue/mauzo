@@ -6,16 +6,8 @@ function db(): IDbRepository {
   return _db;
 }
 
-/**
- * Sync handler for reading sales data from SQLite/Turso.
- * Maps the GET /api/sync/:code/sales endpoint to relational SQL queries under-the-hood.
- */
 export async function getSalesHandler(storeCode: string): Promise<any[]> {
-  const data = await db().getSyncData(storeCode);
-  if (data && data.salesData) {
-    return JSON.parse(data.salesData);
-  }
-  return [];
+  return await db().getSalesData(storeCode);
 }
 
 export async function saveSalesHandler(storeCode: string, sales: any[]): Promise<boolean> {
@@ -24,11 +16,7 @@ export async function saveSalesHandler(storeCode: string, sales: any[]): Promise
 }
 
 export async function getProductsHandler(storeCode: string): Promise<any[]> {
-  const data = await db().getSyncData(storeCode);
-  if (data && data.productsData) {
-    return JSON.parse(data.productsData);
-  }
-  return [];
+  return await db().getProductsData(storeCode);
 }
 
 export async function saveProductsHandler(storeCode: string, products: any[]): Promise<boolean> {
@@ -37,11 +25,7 @@ export async function saveProductsHandler(storeCode: string, products: any[]): P
 }
 
 export async function getUsersHandler(storeCode: string): Promise<any[]> {
-  const data = await db().getSyncData(storeCode);
-  if (data && data.usersData) {
-    return JSON.parse(data.usersData);
-  }
-  return [];
+  return await db().getUsersData(storeCode);
 }
 
 export async function saveUsersHandler(storeCode: string, users: any[]): Promise<boolean> {
